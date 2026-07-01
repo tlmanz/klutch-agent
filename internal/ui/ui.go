@@ -12,9 +12,11 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -32,19 +34,21 @@ type UI struct {
 	ag          *agent.Agent
 	startHidden bool
 
-	// header
-	statusLabel  *widget.Label
-	serverLabel  *widget.Label
-	versionLabel *widget.Label
+	// header / app bar
+	statusBadge *statusBadge
+	serverText  *canvas.Text
+	versionText *canvas.Text
 
 	// printers tab
-	printers     []wire.Printer
-	printerTable *widget.Table
+	printers      []wire.Printer
+	printerTable  *widget.Table
+	printersCount *statCard
 
 	// jobs tab
-	jobs      []store.JobRecord
-	jobTable  *widget.Table
-	jobsCount *widget.Label
+	jobs        []store.JobRecord
+	jobTable    *widget.Table
+	statPrinted *statCard
+	statFailed  *statCard
 
 	// settings tab
 	serverEntry     *widget.Entry
@@ -60,9 +64,10 @@ type UI struct {
 // New builds the UI around an agent. version is the running build's version.
 func New(ctx context.Context, ag *agent.Agent) *UI {
 	a := app.NewWithID(autostart.AppID)
+	a.Settings().SetTheme(newKlutchTheme())
 	a.SetIcon(theme.ComputerIcon())
 	w := a.NewWindow("Klutch Print Agent")
-	w.Resize(fyne.NewSize(780, 540))
+	w.Resize(fyne.NewSize(860, 600))
 
 	u := &UI{ctx: ctx, app: a, win: w, ag: ag}
 	u.build()
@@ -76,17 +81,7 @@ func (u *UI) SetStartHidden(b bool) { u.startHidden = b }
 
 // build assembles the window content, tray menu, and close-to-tray behaviour.
 func (u *UI) build() {
-	u.statusLabel = widget.NewLabel("")
-	u.serverLabel = widget.NewLabel("")
-	u.versionLabel = widget.NewLabel("")
-	header := container.NewHBox(
-		widget.NewLabelWithStyle("Status:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		u.statusLabel,
-		widget.NewSeparator(),
-		u.serverLabel,
-		widget.NewSeparator(),
-		u.versionLabel,
-	)
+	header := u.buildHeader()
 
 	tabs := container.NewAppTabs(
 		container.NewTabItemWithIcon("Printers", theme.ComputerIcon(), u.buildPrintersTab()),
@@ -96,11 +91,49 @@ func (u *UI) build() {
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 
-	u.win.SetContent(container.NewBorder(container.NewVBox(header, widget.NewSeparator()), nil, nil, nil, tabs))
+	u.win.SetContent(container.NewBorder(header, nil, nil, nil, container.NewPadded(tabs)))
 
 	// Close hides to tray so the agent keeps printing in the background.
 	u.win.SetCloseIntercept(func() { u.win.Hide() })
 	u.buildTray()
+}
+
+// buildHeader is the top app bar: brand mark + title on the left, live status
+// badge + backend/version on the right, over a surface-colored strip.
+func (u *UI) buildHeader() fyne.CanvasObject {
+	// Brand mark: amber rounded square with a dark "K".
+	mark := canvas.NewRectangle(brandPrimary)
+	mark.CornerRadius = 9
+	k := canvas.NewText("K", brandOnPrimary)
+	k.TextStyle = fyne.TextStyle{Bold: true}
+	k.TextSize = 20
+	k.Alignment = fyne.TextAlignCenter
+	markBox := container.NewGridWrap(fyne.NewSize(38, 38), container.NewStack(mark, container.NewCenter(k)))
+
+	title := canvas.NewText("Klutch Print Agent", theme.Color(theme.ColorNameForeground))
+	title.TextStyle = fyne.TextStyle{Bold: true}
+	title.TextSize = 18
+	u.serverText = canvas.NewText("", mutedColor())
+	u.serverText.TextSize = 12
+	titleBox := container.NewVBox(title, u.serverText)
+
+	left := container.NewHBox(container.NewCenter(markBox), titleBox)
+
+	u.statusBadge = newStatusBadge()
+	u.versionText = canvas.NewText("", mutedColor())
+	u.versionText.TextSize = 12
+	u.versionText.Alignment = fyne.TextAlignTrailing
+	right := container.NewVBox(
+		container.NewHBox(layout.NewSpacer(), u.statusBadge.obj),
+		u.versionText,
+	)
+
+	bar := container.NewBorder(nil, nil, left, right)
+
+	bg := canvas.NewRectangle(surfaceColor())
+	sep := canvas.NewRectangle(strokeColor())
+	sep.SetMinSize(fyne.NewSize(0, 1))
+	return container.NewStack(bg, container.NewBorder(nil, sep, nil, nil, container.NewPadded(bar)))
 }
 
 // buildTray adds a system-tray menu (open / check updates / quit) on desktops
@@ -133,32 +166,45 @@ func (u *UI) buildPrintersTab() fyne.CanvasObject {
 			p := u.printers[id.Row]
 			if id.Col == 0 {
 				l.SetText(p.Name)
+				l.TextStyle = fyne.TextStyle{Bold: true}
 			} else {
 				l.SetText(p.Description)
+				l.TextStyle = fyne.TextStyle{}
 			}
 		},
 	)
 	u.printerTable.ShowHeaderRow = true
-	u.printerTable.CreateHeader = func() fyne.CanvasObject { return widget.NewLabel("") }
+	u.printerTable.CreateHeader = func() fyne.CanvasObject {
+		return widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	}
 	u.printerTable.UpdateHeader = func(id widget.TableCellID, o fyne.CanvasObject) {
 		h := []string{"Printer", "Description"}
 		o.(*widget.Label).SetText(h[id.Col])
 	}
-	u.printerTable.SetColumnWidth(0, 260)
-	u.printerTable.SetColumnWidth(1, 460)
+	u.printerTable.SetColumnWidth(0, 280)
+	u.printerTable.SetColumnWidth(1, 480)
 
-	help := widget.NewLabel("Printers detected on this PC and advertised to Klutch. Tag each one's type and paper width in the dashboard.")
-	help.Wrapping = fyne.TextWrapWord
-	return container.NewBorder(help, nil, nil, nil, u.printerTable)
+	u.printersCount = newStatCard("Printers detected", brandPrimary)
+
+	head := container.NewBorder(nil, nil,
+		sectionTitle("Connected printers", "Advertised to Klutch. Tag each one's type and paper width in the dashboard."),
+		container.NewGridWrap(fyne.NewSize(190, 72), u.printersCount.obj),
+	)
+
+	return container.NewBorder(
+		container.NewVBox(head, widget.NewSeparator()),
+		nil, nil, nil,
+		card(u.printerTable),
+	)
 }
 
 func (u *UI) buildJobsTab() fyne.CanvasObject {
-	u.jobsCount = widget.NewLabel("")
 	u.jobTable = widget.NewTable(
 		func() (int, int) { return len(u.jobs), 5 },
 		func() fyne.CanvasObject { return widget.NewLabel("") },
 		func(id widget.TableCellID, o fyne.CanvasObject) {
 			l := o.(*widget.Label)
+			l.TextStyle = fyne.TextStyle{}
 			if id.Row >= len(u.jobs) {
 				l.SetText("")
 				return
@@ -173,9 +219,9 @@ func (u *UI) buildJobsTab() fyne.CanvasObject {
 				l.SetText(j.Kind)
 			case 3:
 				if j.Status == "ok" {
-					l.SetText("OK")
+					l.SetText("● OK")
 				} else {
-					l.SetText("FAILED")
+					l.SetText("● Failed")
 				}
 			case 4:
 				if j.Error != "" {
@@ -187,24 +233,36 @@ func (u *UI) buildJobsTab() fyne.CanvasObject {
 		},
 	)
 	u.jobTable.ShowHeaderRow = true
-	u.jobTable.CreateHeader = func() fyne.CanvasObject { return widget.NewLabel("") }
+	u.jobTable.CreateHeader = func() fyne.CanvasObject {
+		return widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	}
 	u.jobTable.UpdateHeader = func(id widget.TableCellID, o fyne.CanvasObject) {
 		h := []string{"Time", "Printer", "Kind", "Status", "Detail"}
 		o.(*widget.Label).SetText(h[id.Col])
 	}
-	u.jobTable.SetColumnWidth(0, 160)
-	u.jobTable.SetColumnWidth(1, 160)
-	u.jobTable.SetColumnWidth(2, 100)
-	u.jobTable.SetColumnWidth(3, 80)
-	u.jobTable.SetColumnWidth(4, 260)
+	u.jobTable.SetColumnWidth(0, 170)
+	u.jobTable.SetColumnWidth(1, 170)
+	u.jobTable.SetColumnWidth(2, 110)
+	u.jobTable.SetColumnWidth(3, 90)
+	u.jobTable.SetColumnWidth(4, 280)
+
+	u.statPrinted = newStatCard("Printed", brandSuccess())
+	u.statFailed = newStatCard("Failed", brandError())
 
 	refresh := widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() { go u.refresh() })
-	top := container.NewHBox(u.jobsCount, widget.NewSeparator(), refresh)
-	return container.NewBorder(top, nil, nil, nil, u.jobTable)
+	stats := container.NewGridWithColumns(2, u.statPrinted.obj, u.statFailed.obj)
+	head := container.NewBorder(nil, nil, nil, container.NewVBox(refresh, layout.NewSpacer()), stats)
+
+	return container.NewBorder(
+		container.NewVBox(head, widget.NewSeparator()),
+		nil, nil, nil,
+		card(u.jobTable),
+	)
 }
 
 func (u *UI) buildUpdatesTab() fyne.CanvasObject {
 	u.updateStatus = widget.NewLabel("")
+	u.updateStatus.Wrapping = fyne.TextWrapWord
 	u.checkBtn = widget.NewButtonWithIcon("Check now", theme.SearchIcon(), func() { u.doCheck() })
 	u.installBtn = widget.NewButtonWithIcon("Install update", theme.DownloadIcon(), func() { u.doInstall() })
 	u.installBtn.Importance = widget.HighImportance
@@ -212,12 +270,16 @@ func (u *UI) buildUpdatesTab() fyne.CanvasObject {
 
 	help := widget.NewLabel("The agent updates itself from its release channel. Enable automatic updates in Settings to install them without prompting.")
 	help.Wrapping = fyne.TextWrapWord
-	return container.NewVBox(
+
+	body := container.NewVBox(
+		sectionTitle("Software updates", ""),
 		u.updateStatus,
+		widget.NewSeparator(),
 		container.NewHBox(u.checkBtn, u.installBtn),
 		widget.NewSeparator(),
 		help,
 	)
+	return container.NewVScroll(container.NewVBox(card(body)))
 }
 
 func (u *UI) buildSettingsTab() fyne.CanvasObject {
@@ -233,6 +295,7 @@ func (u *UI) buildSettingsTab() fyne.CanvasObject {
 	})
 
 	reEnroll := widget.NewButtonWithIcon("Set up / reconnect", theme.LoginIcon(), func() { u.showEnrollDialog() })
+	reEnroll.Importance = widget.HighImportance
 
 	u.autoUpdateCheck = widget.NewCheck("Install updates automatically", func(b bool) {
 		if err := u.ag.SetAutoUpdate(b); err != nil {
@@ -251,13 +314,21 @@ func (u *UI) buildSettingsTab() fyne.CanvasObject {
 		}
 	})
 
-	form := widget.NewForm(
-		widget.NewFormItem("Backend server", container.NewBorder(nil, nil, nil, saveServer, u.serverEntry)),
-		widget.NewFormItem("Enrollment", reEnroll),
-		widget.NewFormItem("Updates", u.autoUpdateCheck),
-		widget.NewFormItem("Startup", u.autostartCheck),
+	connection := container.NewVBox(
+		sectionTitle("Connection", "Where this agent sends its heartbeat and receives jobs."),
+		widget.NewForm(
+			widget.NewFormItem("Backend server", container.NewBorder(nil, nil, nil, saveServer, u.serverEntry)),
+			widget.NewFormItem("Enrollment", reEnroll),
+		),
 	)
-	return container.NewVScroll(form)
+
+	preferences := container.NewVBox(
+		sectionTitle("Preferences", "How the agent behaves on this PC."),
+		u.autoUpdateCheck,
+		u.autostartCheck,
+	)
+
+	return container.NewVScroll(container.NewVBox(card(connection), card(preferences)))
 }
 
 // Run wires up the refresh loop, shows the first-run enrollment wizard if needed,
@@ -314,20 +385,32 @@ func (u *UI) refresh() {
 		u.printers = st.Printers
 		u.jobs = jobs
 
-		status := "Disconnected"
+		// Status badge: color-coded by connection state.
 		switch {
 		case !st.Enrolled:
-			status = "Not enrolled"
+			u.statusBadge.set("Not enrolled", brandPrimary)
 		case st.Connected:
-			status = "Connected"
+			u.statusBadge.set("Connected", brandSuccess())
+		default:
+			label := "Disconnected"
+			if st.LastError != "" {
+				label = "Disconnected"
+			}
+			u.statusBadge.set(label, brandError())
 		}
-		if st.LastError != "" && !st.Connected {
-			status += " (" + st.LastError + ")"
+
+		server := st.Server
+		if server == "" {
+			server = "No backend configured"
 		}
-		u.statusLabel.SetText(status)
-		u.serverLabel.SetText(st.Server)
-		u.versionLabel.SetText("v" + trimV(st.Version))
-		u.jobsCount.SetText(fmt.Sprintf("%d printed, %d failed", st.JobsOK, st.JobsFailed))
+		u.serverText.Text = server
+		u.serverText.Refresh()
+		u.versionText.Text = "v" + trimV(st.Version)
+		u.versionText.Refresh()
+
+		u.statPrinted.set(fmt.Sprintf("%d", st.JobsOK))
+		u.statFailed.set(fmt.Sprintf("%d", st.JobsFailed))
+		u.printersCount.set(fmt.Sprintf("%d", len(st.Printers)))
 
 		if u.serverEntry.Text == "" {
 			u.serverEntry.SetText(st.Server)
@@ -410,8 +493,8 @@ func (u *UI) showEnrollDialog() {
 	token.Wrapping = fyne.TextWrapBreak
 
 	// Two connection methods; only the selected one's field is shown.
-	codeRow := container.NewVBox(widget.NewLabel("Pairing code"), code)
-	tokenRow := container.NewVBox(widget.NewLabel("Device token"), token)
+	codeRow := container.NewVBox(widget.NewLabelWithStyle("Pairing code", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), code)
+	tokenRow := container.NewVBox(widget.NewLabelWithStyle("Device token", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), token)
 	tokenRow.Hide()
 	mode := widget.NewRadioGroup([]string{"Pairing code", "Device token"}, func(sel string) {
 		if sel == "Device token" {
@@ -422,11 +505,12 @@ func (u *UI) showEnrollDialog() {
 			codeRow.Show()
 		}
 	})
+	mode.Horizontal = true
 	mode.SetSelected("Pairing code")
 
 	content := container.NewVBox(
-		widget.NewLabel("Backend server"), server,
-		widget.NewLabel("Connect using"), mode,
+		widget.NewLabelWithStyle("Backend server", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), server,
+		widget.NewLabelWithStyle("Connect using", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), mode,
 		codeRow, tokenRow,
 	)
 
@@ -466,7 +550,7 @@ func (u *UI) showEnrollDialog() {
 			u.refresh()
 		}()
 	}, u.win)
-	d.Resize(fyne.NewSize(440, 340))
+	d.Resize(fyne.NewSize(460, 360))
 	d.Show()
 }
 
