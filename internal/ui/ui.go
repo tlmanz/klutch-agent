@@ -87,6 +87,16 @@ func New(ctx context.Context, ag *agent.Agent) *UI {
 // window is shown so the operator can complete enrollment.
 func (u *UI) SetStartHidden(b bool) { u.startHidden = b }
 
+// Activate raises the window to the foreground. It is called when a second launch
+// of the agent asks the running instance to show itself instead of starting a
+// rival process. Safe to call from any goroutine.
+func (u *UI) Activate() {
+	fyne.Do(func() {
+		u.win.Show()
+		u.win.RequestFocus()
+	})
+}
+
 // build assembles the window content, tray menu, and close-to-tray behaviour.
 func (u *UI) build() {
 	header := u.buildHeader()

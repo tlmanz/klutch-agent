@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/tlmanz/klutch-agent/internal/agent"
+	"github.com/tlmanz/klutch-agent/internal/singleinstance"
 	"github.com/tlmanz/klutch-agent/internal/store"
 	"github.com/tlmanz/klutch-agent/internal/ui"
 )
@@ -73,6 +74,20 @@ func main() {
 	if err := os.MkdirAll(*dataDirFlag, 0o755); err != nil {
 		log.Fatalf("data dir: %v", err)
 	}
+
+	// Single-instance guard: a second launch (e.g. re-opening from the launcher
+	// while the tray instance runs) must not start a rival agent. If one is
+	// already running, signal it to come to the foreground and exit now, before
+	// touching the store.
+	inst, err := singleinstance.Acquire(*dataDirFlag)
+	if err != nil {
+		log.Printf("single-instance check failed, continuing: %v", err)
+	} else if !inst.Primary() {
+		log.Printf("another Klutch Agent is already running; brought it to the foreground")
+		return
+	}
+	defer inst.Close()
+
 	st, err := store.Open(filepath.Join(*dataDirFlag, "agent.db"))
 	if err != nil {
 		log.Fatalf("open store: %v", err)
@@ -129,6 +144,8 @@ func main() {
 	go ag.Run(ctx)
 	view := ui.New(ctx, ag)
 	view.SetStartHidden(*tray)
+	// A later launch signals this primary instance to surface its window.
+	inst.SetActivate(view.Activate)
 	view.Run() // blocks on the Fyne event loop
 }
 
