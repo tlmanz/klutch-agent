@@ -1,0 +1,99 @@
+name: release
+
+# Tag a version (e.g. `git tag v1.2.3 && git push --tags`) to build every
+# platform natively, generate the self-update manifest, and publish a GitHub
+# Release. Building on each OS's own runner avoids CGO cross-compile pain: Fyne
+# links native OpenGL on each platform.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            asset: klutch-agent-linux-amd64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            asset: klutch-agent-windows-amd64.exe
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            asset: klutch-agent-darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            asset: klutch-agent-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install Fyne build deps (Linux)
+        if: matrix.goos == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libgl1-mesa-dev xorg-dev libxxf86vm-dev
+
+      - name: Build binary (native, CGO)
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          LDFLAGS="-s -w -X main.version=${GITHUB_REF_NAME}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            LDFLAGS="$LDFLAGS -H=windowsgui"   # no console window for the GUI app
+          fi
+          go build -trimpath -ldflags "$LDFLAGS" -o "${{ matrix.asset }}" .
+
+      - name: Build Windows installer (NSIS)
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          Copy-Item "${{ matrix.asset }}" "installer/windows/klutch-agent.exe"
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "/DVERSION=$env:GITHUB_REF_NAME" "installer/windows/klutch-agent.nsi"
+          Copy-Item "installer/windows/klutch-agent-setup.exe" "klutch-agent-setup.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ matrix.asset }}
+            klutch-agent-setup.exe
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate self-update manifest
+        run: REPO="${GITHUB_REPOSITORY}" bash scripts/gen-manifest.sh "${GITHUB_REF_NAME}" dist > dist/manifest.json
+      - name: Show artifacts
+        run: ls -la dist && echo "--- manifest ---" && cat dist/manifest.json
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/klutch-agent-linux-amd64
+            dist/klutch-agent-windows-amd64.exe
+            dist/klutch-agent-darwin-amd64
+            dist/klutch-agent-darwin-arm64
+            dist/klutch-agent-setup.exe
+            dist/manifest.json
+          fail_on_unmatched_files: false
+          generate_release_notes: true

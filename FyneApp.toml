@@ -1,0 +1,8 @@
+Website = "https://klutch.lk"
+
+[Details]
+Icon = "Icon.png"
+Name = "Klutch Agent"
+ID = "lk.klutch.agent"
+Version = "1.0.0"
+Build = 1

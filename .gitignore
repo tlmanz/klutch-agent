@@ -29,4 +29,19 @@ go.work.sum
 
 # Editor/IDE
 # .idea/
-# .vscode/
+.vscode/
+
+# Klutch agent build/release output
+/bin/
+/dist/
+klutch-agent
+klutch-agent-*
+installer/windows/klutch-agent.exe
+installer/windows/*-setup.exe
+
+# Local agent data (SQLite + spool) if run from the repo
+*.db
+*.db-wal
+*.db-shm
+/spool/
+installer
