@@ -15,16 +15,21 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/driver/desktop"
+	fynedesktop "fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/tlmanz/klutch-agent/internal/agent"
 	"github.com/tlmanz/klutch-agent/internal/autostart"
+	"github.com/tlmanz/klutch-agent/internal/desktop"
 	"github.com/tlmanz/klutch-agent/internal/store"
 	"github.com/tlmanz/klutch-agent/wire"
 )
+
+// appIcon is the embedded Klutch icon reused for the window and tray so the
+// running app matches the installed launcher entry.
+var appIcon = fyne.NewStaticResource("icon.png", desktop.IconBytes())
 
 // UI holds the Fyne app, window, and the widgets refreshed from agent state.
 type UI struct {
@@ -51,9 +56,12 @@ type UI struct {
 	statFailed  *statCard
 
 	// settings tab
-	serverEntry     *widget.Entry
-	autoUpdateCheck *widget.Check
-	autostartCheck  *widget.Check
+	serverEntry      *widget.Entry
+	autoUpdateCheck  *widget.Check
+	autostartCheck   *widget.Check
+	appInstallStatus *widget.Label
+	appInstallBtn    *widget.Button
+	appRemoveBtn     *widget.Button
 
 	// updates tab
 	updateStatus *widget.Label
@@ -65,7 +73,7 @@ type UI struct {
 func New(ctx context.Context, ag *agent.Agent) *UI {
 	a := app.NewWithID(autostart.AppID)
 	a.Settings().SetTheme(newKlutchTheme())
-	a.SetIcon(theme.ComputerIcon())
+	a.SetIcon(appIcon)
 	w := a.NewWindow("Klutch Print Agent")
 	w.Resize(fyne.NewSize(860, 600))
 
@@ -139,7 +147,7 @@ func (u *UI) buildHeader() fyne.CanvasObject {
 // buildTray adds a system-tray menu (open / check updates / quit) on desktops
 // that support it.
 func (u *UI) buildTray() {
-	desk, ok := u.app.(desktop.App)
+	desk, ok := u.app.(fynedesktop.App)
 	if !ok {
 		return
 	}
@@ -150,7 +158,7 @@ func (u *UI) buildTray() {
 		fyne.NewMenuItem("Quit", func() { u.app.Quit() }),
 	)
 	desk.SetSystemTrayMenu(m)
-	desk.SetSystemTrayIcon(theme.ComputerIcon())
+	desk.SetSystemTrayIcon(appIcon)
 }
 
 func (u *UI) buildPrintersTab() fyne.CanvasObject {
@@ -328,7 +336,88 @@ func (u *UI) buildSettingsTab() fyne.CanvasObject {
 		u.autostartCheck,
 	)
 
-	return container.NewVScroll(container.NewVBox(card(connection), card(preferences)))
+	u.appInstallStatus = widget.NewLabel("")
+	u.appInstallStatus.Wrapping = fyne.TextWrapWord
+	u.appInstallBtn = widget.NewButtonWithIcon("Add to Applications", theme.DownloadIcon(), func() {
+		u.doInstallApp(u.syncInstallState)
+	})
+	u.appInstallBtn.Importance = widget.HighImportance
+	u.appRemoveBtn = widget.NewButtonWithIcon("Remove", theme.CancelIcon(), func() {
+		go func() {
+			err := desktop.Uninstall()
+			fyne.Do(func() {
+				if err != nil {
+					dialog.ShowError(err, u.win)
+				}
+				u.syncInstallState()
+			})
+		}()
+	})
+	application := container.NewVBox(
+		sectionTitle("Application", "Install Klutch Agent so you can reopen it from your applications menu after quitting."),
+		u.appInstallStatus,
+		container.NewHBox(u.appInstallBtn, u.appRemoveBtn),
+	)
+	u.syncInstallState()
+
+	return container.NewVScroll(container.NewVBox(card(connection), card(application), card(preferences)))
+}
+
+// syncInstallState reflects whether the agent is registered in the OS launcher,
+// toggling the install/remove buttons accordingly.
+func (u *UI) syncInstallState() {
+	if u.appInstallStatus == nil {
+		return
+	}
+	installed, err := desktop.IsInstalled()
+	switch {
+	case err != nil:
+		u.appInstallStatus.SetText("Could not determine install status.")
+		u.appInstallBtn.Enable()
+		u.appRemoveBtn.Disable()
+	case installed:
+		u.appInstallStatus.SetText("Installed — find “Klutch Agent” in your applications menu (Start menu on Windows).")
+		u.appInstallBtn.Disable()
+		u.appRemoveBtn.Enable()
+	default:
+		u.appInstallStatus.SetText("Not installed on this PC yet.")
+		u.appInstallBtn.Enable()
+		u.appRemoveBtn.Disable()
+	}
+}
+
+// doInstallApp registers the agent in the OS launcher (copying the binary to a
+// stable location), reporting success or failure. onDone runs on success.
+func (u *UI) doInstallApp(onDone func()) {
+	go func() {
+		path, err := desktop.Install()
+		fyne.Do(func() {
+			if err != nil {
+				dialog.ShowError(err, u.win)
+				return
+			}
+			dialog.ShowInformation("Added to Applications",
+				"Klutch Agent is now in your applications menu.\n\nInstalled to:\n"+path, u.win)
+			if onDone != nil {
+				onDone()
+			}
+		})
+	}()
+}
+
+// offerInstall prompts (once) to add the agent to the applications menu, so it
+// can be reopened after quitting. It is a no-op if already installed.
+func (u *UI) offerInstall() {
+	if installed, err := desktop.IsInstalled(); err != nil || installed {
+		return
+	}
+	dialog.ShowConfirm("Add to Applications",
+		"Add Klutch Agent to your applications so you can reopen it after quitting?",
+		func(ok bool) {
+			if ok {
+				u.doInstallApp(u.syncInstallState)
+			}
+		}, u.win)
 }
 
 // Run wires up the refresh loop, shows the first-run enrollment wizard if needed,
@@ -357,12 +446,19 @@ func (u *UI) Run() {
 		}
 	}()
 
-	// First-run: prompt for server + pairing code if not enrolled yet.
+	// First-run: prompt for server + pairing code if not enrolled yet. If already
+	// enrolled but not yet added to the applications menu, offer to install it so
+	// the operator can reopen it after quitting.
 	enrolled := u.ag.Snapshot().Enrolled
 	if !enrolled {
 		go func() {
 			time.Sleep(400 * time.Millisecond)
 			fyne.Do(func() { u.showEnrollDialog() })
+		}()
+	} else if !u.startHidden {
+		go func() {
+			time.Sleep(600 * time.Millisecond)
+			fyne.Do(func() { u.offerInstall() })
 		}()
 	}
 
@@ -545,7 +641,11 @@ func (u *UI) showEnrollDialog() {
 					dialog.ShowError(err, u.win)
 					return
 				}
-				dialog.ShowInformation("Connected", "This agent is now connected to Klutch.", u.win)
+				// After connecting, offer to add the agent to the applications
+				// menu (sequenced so the dialogs don't stack).
+				info := dialog.NewInformation("Connected", "This agent is now connected to Klutch.", u.win)
+				info.SetOnClosed(func() { u.offerInstall() })
+				info.Show()
 			})
 			u.refresh()
 		}()
