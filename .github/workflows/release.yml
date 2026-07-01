@@ -25,14 +25,6 @@ jobs:
             goos: windows
             goarch: amd64
             asset: klutch-agent-windows-amd64.exe
-          - os: macos-13
-            goos: darwin
-            goarch: amd64
-            asset: klutch-agent-darwin-amd64
-          - os: macos-latest
-            goos: darwin
-            goarch: arm64
-            asset: klutch-agent-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -91,8 +83,6 @@ jobs:
           files: |
             dist/klutch-agent-linux-amd64
             dist/klutch-agent-windows-amd64.exe
-            dist/klutch-agent-darwin-amd64
-            dist/klutch-agent-darwin-arm64
             dist/klutch-agent-setup.exe
             dist/manifest.json
           fail_on_unmatched_files: false
