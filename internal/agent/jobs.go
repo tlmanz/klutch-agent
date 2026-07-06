@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -75,6 +76,12 @@ func (a *Agent) reqIDOf(id string) string {
 	defer a.mu.Unlock()
 	if j, ok := a.jobs[id]; ok {
 		return j.ReqID
+	}
+	// Foreign OS-queue jobs are not in the registry; their ID is the request id.
+	for _, j := range a.osJobs {
+		if j.ID == id {
+			return j.ReqID
+		}
 	}
 	return ""
 }
@@ -197,6 +204,7 @@ func (a *Agent) CancelJob(id string) error {
 		return err
 	}
 	a.removeJob(id)
+	go a.refreshQueue(context.Background()) // reflect the cleared job promptly
 	return nil
 }
 
@@ -261,6 +269,86 @@ func (a *Agent) ReprintJob(id string) error {
 }
 
 // --- helpers ----------------------------------------------------------------
+
+// --- OS-queue enumeration ---------------------------------------------------
+
+// enumerateQueueJobs lists the jobs actually sitting in the OS print queues, so
+// the Jobs screen reflects the real queue (matching the printer cards) and can
+// surface jobs the agent did not dispatch itself (e.g. stuck/foreign jobs). On
+// CUPS the currently-printing job (from `lpstat -p`) is marked "printing"; the
+// rest are "queued". Windows queue listing is a follow-up (returns nil).
+func enumerateQueueJobs(ctx context.Context) []JobInfo {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	printing := cupsPrintingJobs(ctx)
+	out, err := exec.CommandContext(ctx, "lpstat", "-o").Output()
+	if err != nil {
+		return nil
+	}
+	var jobs []JobInfo
+	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) == 0 {
+			continue
+		}
+		req := f[0]
+		printer := jobPrinter(req)
+		if printer == "" {
+			continue
+		}
+		state := "queued"
+		if printing[printer] == req {
+			state = "printing"
+		}
+		jobs = append(jobs, JobInfo{
+			ID: req, Printer: printer, Doc: queueDocLabel(req),
+			State: state, Percent: -1, ReqID: req,
+		})
+	}
+	return jobs
+}
+
+// cupsPrintingJobs maps each printer to the request id it is currently printing.
+func cupsPrintingJobs(ctx context.Context) map[string]string {
+	m := map[string]string{}
+	out, err := exec.CommandContext(ctx, "lpstat", "-p").Output()
+	if err != nil {
+		return m
+	}
+	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	for sc.Scan() {
+		if _, after, ok := strings.Cut(sc.Text(), "now printing "); ok {
+			if f := strings.Fields(after); len(f) > 0 {
+				req := strings.TrimSuffix(f[0], ".")
+				if p := jobPrinter(req); p != "" {
+					m[p] = req
+				}
+			}
+		}
+	}
+	return m
+}
+
+// queueDocLabel is a friendly label for a foreign queue job (no document name is
+// available from the spooler), e.g. "Print job 15".
+func queueDocLabel(reqID string) string {
+	if i := strings.LastIndex(reqID, "-"); i >= 0 && i < len(reqID)-1 {
+		return "Print job " + reqID[i+1:]
+	}
+	return "Print job"
+}
+
+// refreshQueue scans the OS queues and publishes the result for the UI (merged
+// with agent-tracked jobs in Snapshot).
+func (a *Agent) refreshQueue(ctx context.Context) {
+	jobs := enumerateQueueJobs(ctx)
+	a.mu.Lock()
+	a.osJobs = jobs
+	a.mu.Unlock()
+	a.notify()
+}
 
 // extFor maps a job kind to its spool-file extension.
 func extFor(kind string) string {

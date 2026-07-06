@@ -66,6 +66,11 @@ type Agent struct {
 	// It feeds State.ActiveJobs; completed jobs still roll into the store history.
 	jobs map[string]*JobInfo
 
+	// osJobs is the last scan of the OS print queues (jobs the agent did not
+	// necessarily dispatch), merged with jobs in Snapshot so the Jobs screen
+	// reflects the real queue. Guarded by mu.
+	osJobs []JobInfo
+
 	// outcomeHook, if set by the UI, is called with each terminal job so the UI
 	// can raise a desktop notification (respecting the user's prefs). The agent
 	// core stays UI-agnostic; it just fires the event.
@@ -161,7 +166,23 @@ func (a *Agent) Snapshot() State {
 	defer a.mu.Unlock()
 	s := a.state
 	s.Printers = append([]PrinterInfo(nil), a.state.Printers...)
-	s.ActiveJobs = append([]JobInfo(nil), a.state.ActiveJobs...)
+	// Merge agent-tracked jobs with the OS queue scan. Agent-tracked jobs win
+	// (they carry the real document name + progress + controls); foreign OS jobs
+	// are appended, deduplicated by CUPS request id.
+	merged := append([]JobInfo(nil), a.state.ActiveJobs...)
+	seen := make(map[string]bool, len(merged))
+	for _, j := range merged {
+		if j.ReqID != "" {
+			seen[j.ReqID] = true
+		}
+	}
+	for _, j := range a.osJobs {
+		if j.ReqID != "" && seen[j.ReqID] {
+			continue
+		}
+		merged = append(merged, j)
+	}
+	s.ActiveJobs = merged
 	return s
 }
 

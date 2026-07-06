@@ -1,4 +1,4 @@
-import { FileText, Pause, Play, RefreshCw, RotateCcw } from 'lucide-react'
+import { FileText, Pause, Play, RefreshCw, RotateCcw, X } from 'lucide-react'
 import type { StateDTO } from '../lib/types'
 import { statusTone } from '../lib/status'
 import { agent } from '../lib/agent'
@@ -78,6 +78,16 @@ function JobRow({ r }: { r: Row }) {
           <Button variant="primary" icon={Play} onClick={() => agent.resumeJob(r.id)}>
             Resume
           </Button>
+        )}
+        {['printing', 'queued', 'paused'].includes(r.state) && (
+          <button
+            type="button"
+            title="Cancel job"
+            onClick={() => agent.cancelJob(r.id)}
+            className="flex h-[34px] w-[34px] items-center justify-center rounded-[10px] border border-border2 bg-surface2 text-muted transition hover:text-red-ink"
+          >
+            <X size={16} strokeWidth={2.4} />
+          </button>
         )}
         {r.state === 'failed' && (
           <Button variant="danger" icon={RotateCcw} onClick={() => agent.reprintJob(r.id)}>

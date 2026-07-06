@@ -55,6 +55,7 @@ func (a *Agent) connect(ctx context.Context, server, token string) error {
 	// Advertise every printer connected to this PC.
 	printers := enumeratePrinters(ctx, a.cfg.FallbackPrinter)
 	a.recordPrinters(printers)
+	a.refreshQueue(ctx)
 	hello, err := wire.Encode(wire.TypeHello, wire.Hello{Printers: toWire(printers)})
 	if err != nil {
 		return err
@@ -108,6 +109,7 @@ func (a *Agent) watchPrinters(ctx context.Context, cl *wsClient, lastFP string) 
 		case <-t.C:
 			cur := enumeratePrinters(ctx, a.cfg.FallbackPrinter)
 			a.recordPrinters(cur) // refresh UI state every tick (status/queue/default)
+			a.refreshQueue(ctx)   // refresh the OS-queue job list for the Jobs screen
 			fp := fingerprint(cur)
 			if fp == lastFP {
 				continue
