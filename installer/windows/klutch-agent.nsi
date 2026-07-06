@@ -23,6 +23,10 @@ RequestExecutionLevel admin
 !define APP_EXE "klutch-agent.exe"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\KlutchAgent"
 
+; Official Klutch mark: branding for the wizard, shortcuts, and Add/Remove entry.
+!define MUI_ICON "klutch-agent.ico"
+!define MUI_UNICON "klutch-agent.ico"
+
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
