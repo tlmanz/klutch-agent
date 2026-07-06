@@ -2,8 +2,8 @@ name: release
 
 # Tag a version (e.g. `git tag v1.2.3 && git push --tags`) to build every
 # platform natively, generate the self-update manifest, and publish a GitHub
-# Release. Building on each OS's own runner avoids CGO cross-compile pain: Fyne
-# links native OpenGL on each platform.
+# Release. Building on each OS's own runner avoids cross-compile pain: the Wails
+# webview links the native webview (WebKitGTK on Linux, WebView2 on Windows).
 on:
   push:
     tags: ['v*']
@@ -31,21 +31,30 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: Install Fyne build deps (Linux)
+      - name: Install Wails build deps (Linux)
         if: matrix.goos == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y gcc pkg-config libgl1-mesa-dev xorg-dev libxxf86vm-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 
-      - name: Build binary (native, CGO)
+      - name: Install Wails CLI
+        shell: bash
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
+
+      - name: Build (Wails, native webview)
         shell: bash
         env:
           CGO_ENABLED: '1'
         run: |
-          LDFLAGS="-s -w -X main.version=${GITHUB_REF_NAME}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            LDFLAGS="$LDFLAGS -H=windowsgui"   # no console window for the GUI app
-          fi
-          go build -trimpath -ldflags "$LDFLAGS" -o "${{ matrix.asset }}" .
+          TAGS=""
+          if [ "${{ matrix.goos }}" = "linux" ]; then TAGS="-tags webkit2_41"; fi
+          wails build -platform ${{ matrix.goos }}/amd64 $TAGS \
+            -ldflags "-X main.version=${GITHUB_REF_NAME}" -o "${{ matrix.asset }}"
+          cp "build/bin/${{ matrix.asset }}" "${{ matrix.asset }}"
 
       - name: Build Windows installer (NSIS)
         if: matrix.goos == 'windows'

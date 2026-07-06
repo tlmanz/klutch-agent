@@ -1,13 +1,15 @@
-# Klutch print agent (desktop, Fyne). One self-updating GUI binary that holds the
-# WSS socket, drives local printers, and stores job history in SQLite.
+# Klutch print agent (desktop, Wails webview). One self-updating GUI binary that
+# holds the WSS socket, drives local printers, and stores job history in SQLite.
 #
-# Fyne needs CGO + system OpenGL/X11 headers. On Ubuntu/Debian:
+# The Wails webview needs CGO + WebKitGTK 4.1 + Node. On Ubuntu/Debian:
 #   make deps-linux
+# and install the Wails CLI once: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
 # Release binaries are built natively per-OS in CI (.github/workflows/release.yml);
-# there is no local cross-compile here.
+# there is no local cross-compile (each OS links its native webview).
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  = -X main.version=$(VERSION)
+TAGS     = webkit2_41
 BIN      = bin/klutch-agent
 
 .DEFAULT_GOAL := help
@@ -18,28 +20,33 @@ help: ## Show this help
 	  | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: deps-linux
-deps-linux: ## Install the Linux build dependencies for Fyne (Debian/Ubuntu)
-	sudo apt-get update && sudo apt-get install -y gcc pkg-config libgl1-mesa-dev xorg-dev libxxf86vm-dev
+deps-linux: ## Install the Linux build dependencies for Wails (Debian/Ubuntu)
+	sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
 
 .PHONY: build
-build: ## Build the agent binary into ./bin (CGO on)
-	CGO_ENABLED=1 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
+build: ## Build the app (frontend + binary) via Wails into build/bin
+	wails build -tags $(TAGS) -ldflags "$(LDFLAGS)"
+
+.PHONY: dev
+dev: ## Run the app with live frontend reload
+	wails dev -tags $(TAGS)
 
 .PHONY: run
-run: ## Build and run the GUI
-	CGO_ENABLED=1 go run -ldflags "$(LDFLAGS)" .
+run: build ## Build and run the GUI
+	./build/bin/klutch-agent
 
 .PHONY: headless
-headless: build ## Run headless (no GUI)
+headless: ## Build the binary and run headless (no GUI)
+	CGO_ENABLED=1 go build -tags $(TAGS) -trimpath -ldflags "$(LDFLAGS)" -o $(BIN) .
 	$(BIN) -headless
 
 .PHONY: test
 test: ## Run tests
-	CGO_ENABLED=1 go test ./... -race
+	CGO_ENABLED=1 go test -tags $(TAGS) ./... -race
 
 .PHONY: vet
 vet: ## go vet
-	CGO_ENABLED=1 go vet ./...
+	CGO_ENABLED=1 go vet -tags $(TAGS) ./...
 
 .PHONY: fmt
 fmt: ## Format all Go code

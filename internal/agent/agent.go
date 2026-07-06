@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tlmanz/klutch-agent/internal/store"
-	"github.com/tlmanz/klutch-agent/wire"
 )
 
 // Config is the agent's runtime configuration. Values are seeded from flags/env
@@ -39,10 +38,18 @@ type State struct {
 	AvailableVersion string // newer version the manifest advertises, "" if current
 	LastCheck        time.Time
 	LastError        string
-	Printers         []wire.Printer
+	Printers         []PrinterInfo
+	ActiveJobs       []JobInfo // in-flight / recently-finished live jobs
 	JobsOK           int
 	JobsFailed       int
 	AutoUpdate       bool
+
+	// Redesign settings, persisted in the store.
+	DefaultPrinter string
+	Theme          string // "dark" | "light"
+	NotifyDone     bool
+	NotifyFailed   bool
+	NotifyWeekly   bool
 }
 
 // Agent owns the connection lifecycle and mutable state.
@@ -54,6 +61,15 @@ type Agent struct {
 	mu    sync.Mutex
 	state State
 	token string
+
+	// jobs tracks in-flight/recently-finished live jobs by ID, guarded by mu.
+	// It feeds State.ActiveJobs; completed jobs still roll into the store history.
+	jobs map[string]*JobInfo
+
+	// outcomeHook, if set by the UI, is called with each terminal job so the UI
+	// can raise a desktop notification (respecting the user's prefs). The agent
+	// core stays UI-agnostic; it just fires the event.
+	outcomeHook func(store.JobRecord)
 
 	enrolled chan struct{} // signalled when a token becomes available or server changes
 
@@ -101,13 +117,39 @@ func New(cfg Config, st *store.Store, logger *log.Logger) *Agent {
 	ok, failed, _ := st.JobCounts()
 	a.state.JobsOK, a.state.JobsFailed = ok, failed
 	if ps, _ := st.Printers(); len(ps) > 0 {
-		wp := make([]wire.Printer, len(ps))
+		wp := make([]PrinterInfo, len(ps))
 		for i, p := range ps {
-			wp[i] = wire.Printer{Name: p.Name, Description: p.Description}
+			// Seed from persistence with unknown live status; the first connect
+			// re-enumerates and fills status/connection/queue.
+			wp[i] = PrinterInfo{Name: p.Name, Description: p.Description, Status: "idle", Connection: "Wi-Fi"}
 		}
 		a.state.Printers = wp
 	}
+
+	// Redesign settings.
+	a.state.DefaultPrinter, _ = st.Setting(store.KeyDefaultPrinter)
+	a.state.Theme = "dark"
+	if v, _ := st.Setting(store.KeyTheme); v == "light" || v == "dark" {
+		a.state.Theme = v
+	}
+	a.state.NotifyDone = settingBool(st, store.KeyNotifyDone, true)
+	a.state.NotifyFailed = settingBool(st, store.KeyNotifyFailed, true)
+	a.state.NotifyWeekly = settingBool(st, store.KeyNotifyWeekly, false)
+	a.jobs = map[string]*JobInfo{}
 	return a
+}
+
+// settingBool reads a "1"/"0" setting, falling back to def when unset.
+func settingBool(st *store.Store, key string, def bool) bool {
+	v, _ := st.Setting(key)
+	switch v {
+	case "1":
+		return true
+	case "0":
+		return false
+	default:
+		return def
+	}
 }
 
 // SetRelaunch overrides how the process is replaced after a self-update.
@@ -118,7 +160,8 @@ func (a *Agent) Snapshot() State {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := a.state
-	s.Printers = append([]wire.Printer(nil), a.state.Printers...)
+	s.Printers = append([]PrinterInfo(nil), a.state.Printers...)
+	s.ActiveJobs = append([]JobInfo(nil), a.state.ActiveJobs...)
 	return s
 }
 
@@ -279,6 +322,64 @@ func (a *Agent) SetAutoUpdate(on bool) error {
 	a.mu.Unlock()
 	a.mutate(func(s *State) { s.AutoUpdate = on })
 	return nil
+}
+
+// SetDefaultPrinter pins the OS default queue, persists the choice, and reflects
+// it in state immediately (the next enumeration confirms it).
+func (a *Agent) SetDefaultPrinter(name string) error {
+	if err := setDefaultPrinter(context.Background(), name); err != nil {
+		return err
+	}
+	if err := a.store.SetSetting(store.KeyDefaultPrinter, name); err != nil {
+		return err
+	}
+	a.mutate(func(s *State) {
+		s.DefaultPrinter = name
+		for i := range s.Printers {
+			s.Printers[i].Default = s.Printers[i].Name == name
+		}
+	})
+	return nil
+}
+
+// SetTheme persists the UI theme preference ("dark"/"light").
+func (a *Agent) SetTheme(theme string) error {
+	if theme != "light" {
+		theme = "dark"
+	}
+	if err := a.store.SetSetting(store.KeyTheme, theme); err != nil {
+		return err
+	}
+	a.mutate(func(s *State) { s.Theme = theme })
+	return nil
+}
+
+// setBoolSetting is the shared path for the notification toggles.
+func (a *Agent) setBoolSetting(key string, on bool, apply func(*State)) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	if err := a.store.SetSetting(key, v); err != nil {
+		return err
+	}
+	a.mutate(apply)
+	return nil
+}
+
+// SetNotifyDone toggles the "job completed" desktop notification.
+func (a *Agent) SetNotifyDone(on bool) error {
+	return a.setBoolSetting(store.KeyNotifyDone, on, func(s *State) { s.NotifyDone = on })
+}
+
+// SetNotifyFailed toggles the "job failed" desktop notification.
+func (a *Agent) SetNotifyFailed(on bool) error {
+	return a.setBoolSetting(store.KeyNotifyFailed, on, func(s *State) { s.NotifyFailed = on })
+}
+
+// SetNotifyWeekly toggles the weekly-summary preference.
+func (a *Agent) SetNotifyWeekly(on bool) error {
+	return a.setBoolSetting(store.KeyNotifyWeekly, on, func(s *State) { s.NotifyWeekly = on })
 }
 
 // wake signals the run loop (non-blocking) that enrollment or the server changed.

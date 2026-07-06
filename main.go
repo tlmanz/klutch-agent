@@ -3,10 +3,10 @@
 // pushed to it (PDF or ESC/POS raster), and reports status. It renders nothing
 // itself (the backend does); it only transports bytes to the OS spooler.
 //
-// It ships a Fyne UI to view printers, browse the print-job history, change
-// settings, and check/install updates, backed by a local SQLite store. It keeps
-// running in the system tray and self-updates from its release channel. Pass
-// -headless to run with no UI (for a server or unattended box).
+// It ships a Wails (webview) UI to view printers, browse the print-job history,
+// change settings, and check/install updates, backed by a local SQLite store. It
+// keeps running in the system tray and self-updates from its release channel.
+// Pass -headless to run with no UI (for a server or unattended box).
 //
 // It shares ONLY the wire DTOs with the backend (the wire package), never domain
 // types, which is why it lives in its own repository (github.com/tlmanz/klutch-agent).
@@ -38,7 +38,6 @@ import (
 	"github.com/tlmanz/klutch-agent/internal/agent"
 	"github.com/tlmanz/klutch-agent/internal/singleinstance"
 	"github.com/tlmanz/klutch-agent/internal/store"
-	"github.com/tlmanz/klutch-agent/internal/ui"
 )
 
 // defaultUpdateURL points at the manifest published with every GitHub Release of
@@ -140,13 +139,13 @@ func main() {
 		return
 	}
 
-	// GUI: run the agent in the background and show the window (or tray).
+	// GUI: run the agent in the background and show the Wails (webview) window.
+	// A later launch signals this primary instance to surface its window via the
+	// single-instance guard's activate hook.
 	go ag.Run(ctx)
-	view := ui.New(ctx, ag)
-	view.SetStartHidden(*tray)
-	// A later launch signals this primary instance to surface its window.
-	inst.SetActivate(view.Activate)
-	view.Run() // blocks on the Fyne event loop
+	if err := runDesktop(ctx, ag, *tray, inst.SetActivate); err != nil {
+		log.Fatalf("ui: %v", err)
+	}
 }
 
 // dataDir returns the default per-user data directory for the DB + spool.

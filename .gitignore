@@ -44,3 +44,5 @@ installer/windows/*-setup.exe
 *.db-wal
 *.db-shm
 /spool/
+node_modules
+dist

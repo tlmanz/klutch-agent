@@ -1,6 +1,6 @@
 // Package singleinstance enforces that only one agent runs per user data
-// directory. A second launch — e.g. re-opening the app from the launcher while
-// the first instance sits in the tray — must not start a rival agent (two agents
+// directory. A second launch - e.g. re-opening the app from the launcher while
+// the first instance sits in the tray - must not start a rival agent (two agents
 // would fight over the backend socket), it should raise the running one instead.
 //
 // Mechanism (stdlib only, identical on every OS): the first instance listens on

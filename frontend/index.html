@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Klutch Print Agent</title>
+    <script>
+      // Surface any uncaught load/runtime error instead of a silent black screen.
+      window.addEventListener('error', function (e) {
+        var root = document.getElementById('root')
+        if (root && !root.hasChildNodes()) {
+          root.innerHTML =
+            '<pre style="color:#FF8A7E;background:#0C0F14;font:12px/1.5 monospace;padding:24px;margin:0;height:100vh;white-space:pre-wrap;overflow:auto">Klutch UI failed to start:\n\n' +
+            (e && (e.message || e.error) ? String(e.message || e.error) : 'unknown error') +
+            '</pre>'
+        }
+      })
+    </script>
+</head>
+<body>
+<div id="root"></div>
+<script src="./src/main.tsx" type="module"></script>
+</body>
+</html>
+

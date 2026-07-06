@@ -55,7 +55,7 @@ func (a *Agent) connect(ctx context.Context, server, token string) error {
 	// Advertise every printer connected to this PC.
 	printers := enumeratePrinters(ctx, a.cfg.FallbackPrinter)
 	a.recordPrinters(printers)
-	hello, err := wire.Encode(wire.TypeHello, wire.Hello{Printers: printers})
+	hello, err := wire.Encode(wire.TypeHello, wire.Hello{Printers: toWire(printers)})
 	if err != nil {
 		return err
 	}
@@ -94,8 +94,10 @@ func (a *Agent) connect(ctx context.Context, server, token string) error {
 	}
 }
 
-// watchPrinters re-enumerates on a ticker and re-advertises only when the printer
-// set's fingerprint changes, so an unchanged set produces no traffic.
+// watchPrinters re-enumerates on a ticker. It always refreshes the in-memory
+// state (so the UI reflects live status/queue changes) but re-advertises to the
+// backend ONLY when the identity set's fingerprint changes, so status-only
+// changes produce no wire traffic.
 func (a *Agent) watchPrinters(ctx context.Context, cl *wsClient, lastFP string) {
 	t := time.NewTicker(a.cfg.Refresh)
 	defer t.Stop()
@@ -105,12 +107,12 @@ func (a *Agent) watchPrinters(ctx context.Context, cl *wsClient, lastFP string) 
 			return
 		case <-t.C:
 			cur := enumeratePrinters(ctx, a.cfg.FallbackPrinter)
+			a.recordPrinters(cur) // refresh UI state every tick (status/queue/default)
 			fp := fingerprint(cur)
 			if fp == lastFP {
 				continue
 			}
-			a.recordPrinters(cur)
-			env, err := wire.Encode(wire.TypePrinters, wire.Hello{Printers: cur})
+			env, err := wire.Encode(wire.TypePrinters, wire.Hello{Printers: toWire(cur)})
 			if err != nil {
 				continue
 			}
@@ -123,9 +125,10 @@ func (a *Agent) watchPrinters(ctx context.Context, cl *wsClient, lastFP string) 
 	}
 }
 
-// recordPrinters updates the in-memory state and persists the set for the UI.
-func (a *Agent) recordPrinters(printers []wire.Printer) {
-	a.mutate(func(s *State) { s.Printers = append([]wire.Printer(nil), printers...) })
+// recordPrinters updates the in-memory state (full enriched view) and persists
+// the identity set for the UI to seed from on next launch.
+func (a *Agent) recordPrinters(printers []PrinterInfo) {
+	a.mutate(func(s *State) { s.Printers = append([]PrinterInfo(nil), printers...) })
 	recs := make([]store.PrinterRecord, len(printers))
 	now := time.Now()
 	for i, p := range printers {
@@ -137,52 +140,62 @@ func (a *Agent) recordPrinters(printers []wire.Printer) {
 }
 
 // handleJob spools a job's bytes to disk, hands the file to the OS print system,
-// records the outcome in the store, and returns the ACK. The agent never renders
-// (the backend does): it only transports the bytes to the target queue.
+// tracks it live, and records the outcome. The agent never renders (the backend
+// does): it only transports the bytes to the target queue. The ACK is returned
+// as soon as the OS accepts the job for queuing; on CUPS the job is then tracked
+// to completion in the background so the UI shows live "printing → done".
 func (a *Agent) handleJob(ctx context.Context, job wire.Job) wire.JobResult {
 	received := time.Now()
 	rec := store.JobRecord{
 		ID: job.ID, Printer: job.PrinterName, Kind: job.Kind,
 		DocumentRef: job.DocumentRef, ReceivedAt: received,
 	}
-	finish := func(res wire.JobResult) wire.JobResult {
+	fail := func(msg string) wire.JobResult {
 		rec.FinishedAt = time.Now()
-		if res.OK {
-			rec.Status = "ok"
-		} else {
-			rec.Status = "failed"
-			rec.Error = res.Error
-		}
-		if err := a.store.RecordJob(rec); err != nil {
-			a.log.Printf("warning: record job: %v", err)
-		}
-		a.refreshCounts()
-		return res
+		rec.Status = "failed"
+		rec.Error = msg
+		a.recordOutcome(rec)
+		a.removeJob(job.ID)
+		return wire.JobResult{JobID: job.ID, OK: false, Error: msg}
 	}
 
 	payload, err := base64.StdEncoding.DecodeString(job.PayloadB64)
 	if err != nil {
-		return finish(wire.JobResult{JobID: job.ID, OK: false, Error: "bad payload encoding"})
+		return fail("bad payload encoding")
 	}
 	rec.Bytes = len(payload)
 
-	ext := "bin"
-	switch job.Kind {
-	case "pdf":
-		ext = "pdf"
-	case "escpos_raster":
-		ext = "escpos"
-	}
-	path := filepath.Join(a.cfg.SpoolDir, job.ID+"."+ext)
+	path := filepath.Join(a.cfg.SpoolDir, job.ID+"."+extFor(job.Kind))
 	if err := os.WriteFile(path, payload, 0o644); err != nil {
-		return finish(wire.JobResult{JobID: job.ID, OK: false, Error: err.Error()})
+		return fail(err.Error())
 	}
-	if err := dispatch(ctx, job.PrinterName, path); err != nil {
+
+	// Register as a live job before handing it to the spooler so the UI shows it
+	// immediately.
+	a.putJob(JobInfo{
+		ID: job.ID, Printer: job.PrinterName, Doc: docName(job.DocumentRef),
+		Kind: job.Kind, State: "printing", Percent: -1, Started: received,
+	})
+
+	reqID, err := dispatch(ctx, job.PrinterName, path)
+	if err != nil {
 		a.log.Printf("job %s dispatch to %q failed: %v", job.ID, job.PrinterName, err)
-		return finish(wire.JobResult{JobID: job.ID, OK: false, Error: err.Error()})
+		return fail(err.Error())
 	}
-	a.log.Printf("printed job %s (%s, %d bytes) → printer %q (spooled %s)", job.ID, job.Kind, len(payload), job.PrinterName, path)
-	return finish(wire.JobResult{JobID: job.ID, OK: true})
+	a.log.Printf("queued job %s (%s, %d bytes) → printer %q (req %q)", job.ID, job.Kind, len(payload), job.PrinterName, reqID)
+
+	if reqID == "" {
+		// No trackable OS handle (e.g. Windows PrintTo): queue success is the
+		// terminal signal we get, so record it as done now.
+		rec.FinishedAt = time.Now()
+		rec.Status = "ok"
+		a.recordOutcome(rec)
+		a.removeJob(job.ID)
+	} else {
+		a.updateJob(job.ID, func(j *JobInfo) { j.ReqID = reqID })
+		go a.trackCUPSJob(context.Background(), rec, reqID)
+	}
+	return wire.JobResult{JobID: job.ID, OK: true}
 }
 
 // refreshCounts reloads the ok/failed totals from the store into state.
@@ -222,8 +235,10 @@ func redeem(ctx context.Context, server, code string) (string, error) {
 	return out.Token, nil
 }
 
-// fingerprint is a stable digest of a printer set (order-independent).
-func fingerprint(ps []wire.Printer) string {
+// fingerprint is a stable digest of a printer set's identity (order-independent).
+// Only name+description feed it, so live status/queue changes never trigger a
+// re-advertise to the backend.
+func fingerprint(ps []PrinterInfo) string {
 	items := make([]string, len(ps))
 	for i, p := range ps {
 		items[i] = p.Name + "\x00" + p.Description

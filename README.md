@@ -18,17 +18,17 @@ released and updated independently.
   itself as a login item, runs in the system tray, and updates itself from its
   GitHub Releases (checksum-verified, then relaunches).
 - **UI** (Fyne, native, cross-platform):
-  - **Printers** — everything detected on this PC and advertised to Klutch.
-  - **Jobs** — history of every print job with status (OK / FAILED) and the
+  - **Printers** - everything detected on this PC and advertised to Klutch.
+  - **Jobs** - history of every print job with status (OK / FAILED) and the
     error or document reference, kept in a local SQLite database.
-  - **Updates** — current version, check now, install now, and an
+  - **Updates** - current version, check now, install now, and an
     auto-update toggle.
-  - **Settings** — backend server URL, re-enrollment, auto-update, and
+  - **Settings** - backend server URL, re-enrollment, auto-update, and
     "start at login".
-- **Local storage** — SQLite (pure-Go `modernc.org/sqlite`, no CGO for the DB)
+- **Local storage** - SQLite (pure-Go `modernc.org/sqlite`, no CGO for the DB)
   under the per-user data directory, so job history and the printer list survive
   restarts.
-- **Device-token auth** — enrolls once with a one-time pairing code from the
+- **Device-token auth** - enrolls once with a one-time pairing code from the
   dashboard; the token is revocable, tenant + branch scoped, and print-only.
 
 ## Install

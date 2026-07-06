@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Brand fonts: now including Space Grotesk (display), which the Fyne UI could
+   not select per-widget. Files are vendored under src/assets/fonts. */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/SpaceGrotesk-Medium.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/SpaceGrotesk-Bold.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/HankenGrotesk-Regular.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/HankenGrotesk-SemiBold.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Hanken Grotesk';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/HankenGrotesk-Bold.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Spline Sans Mono';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('./assets/fonts/SplineSansMono-Regular.ttf') format('truetype');
+}
+
+/* Design tokens from design/ui.pen. Dark is the default; .light on <html> flips
+   them. Tailwind color utilities resolve through these variables. */
+:root {
+  --bg: #0c0f14;
+  --base: #0e1116;
+  --sidebar: #0b0e12;
+  --winbar: #12161c;
+  --surface: #171b22;
+  --surface2: #1f242d;
+  --border: #1c222b;
+  --border2: #262d38;
+  --amber: #ffc53d;
+  --amber-bg: #3a2e12;
+  --amber-ink: #ffc53d;
+  --teal: #2dd4bf;
+  --teal-bg: #0f2e2a;
+  --teal-ink: #2dd4bf;
+  --red: #ff6b5e;
+  --red-bg: #3a1a18;
+  --red-ink: #ff8a7e;
+  --ink: #f2f4f7;
+  --text: #f2f4f7;
+  --text2: #cdd3db;
+  --muted: #98a2b3;
+  --muted2: #667085;
+  --on-primary: #0e1116;
+}
+
+.light {
+  --bg: #f4f2ef;
+  --base: #ffffff;
+  --sidebar: #efece7;
+  --winbar: #f4f2ef;
+  --surface: #ffffff;
+  --surface2: #f1eee9;
+  --border: #e7e1d9;
+  --border2: #d8d2c9;
+  --amber: #ffc53d;
+  --amber-bg: #fbefcf;
+  --amber-ink: #8a6a00;
+  --teal: #0d9488;
+  --teal-bg: #d7f1ec;
+  --teal-ink: #0d9488;
+  --red: #d92d20;
+  --red-bg: #fbe3df;
+  --red-ink: #d92d20;
+  --ink: #16181d;
+  --text: #16181d;
+  --text2: #3a3f47;
+  --muted: #667085;
+  --muted2: #8a93a3;
+  --on-primary: #16181d;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Hanken Grotesk', system-ui, sans-serif;
+  /* Desktop chrome: no text selection or native context menu by default. */
+  user-select: none;
+  overflow: hidden;
+}
+
+/* Inputs and editable fields should still allow selection. */
+input,
+textarea {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

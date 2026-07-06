@@ -23,6 +23,13 @@ const (
 	KeyAutostart        = "autostart"         // "1" / "0"
 	KeyAvailableVersion = "available_version" // last version the manifest advertised
 	KeyLastCheck        = "last_update_check" // unix seconds
+
+	// Redesign settings.
+	KeyDefaultPrinter = "default_printer" // OS queue name the operator pinned
+	KeyTheme          = "theme"           // "dark" / "light"
+	KeyNotifyDone     = "notify_job_done" // "1" / "0" - notify on job completed
+	KeyNotifyFailed   = "notify_job_fail" // "1" / "0" - notify on job failed
+	KeyNotifyWeekly   = "notify_weekly"   // "1" / "0" - weekly summary
 )
 
 // Store is a handle to the agent's SQLite database.
