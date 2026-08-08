@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"github.com/tlmanz/klutch-agent/internal/imaging"
 	"github.com/tlmanz/klutch-agent/internal/store"
 	"github.com/tlmanz/klutch-agent/wire"
 )
@@ -56,14 +57,24 @@ func (a *Agent) connect(ctx context.Context, server, token string) error {
 	printers := enumeratePrinters(ctx, a.cfg.FallbackPrinter)
 	a.recordPrinters(printers)
 	a.refreshQueue(ctx)
-	hello, err := wire.Encode(wire.TypeHello, wire.Hello{Printers: toWire(printers)})
+	// Hello carries the host facts too (machine, OS, agent build). The server
+	// stores them for the dashboard's agent detail screen; only Hello does, which
+	// is why the TypePrinters refresh below leaves them empty.
+	host := a.hostFacts()
+	hello, err := wire.Encode(wire.TypeHello, wire.Hello{
+		Printers: toWire(printers),
+		Machine:  host.Machine,
+		OS:       host.OS,
+		Version:  host.Version,
+	})
 	if err != nil {
 		return err
 	}
 	if err := cl.send(ctx, hello); err != nil {
 		return err
 	}
-	a.log.Printf("connected to %s, advertised %d printer(s)", wsURL, len(printers))
+	a.log.Printf("connected to %s as %q (%s, agent %s), advertised %d printer(s)",
+		wsURL, host.Machine, host.OS, host.Version, len(printers))
 	a.mutate(func(s *State) {
 		s.Connected = true
 		s.LastError = ""
@@ -87,7 +98,7 @@ func (a *Agent) connect(ctx context.Context, server, token string) error {
 			a.log.Printf("bad job: %v", err)
 			continue
 		}
-		result := a.handleJob(ctx, job)
+		result := a.handleJob(a.jobCtx(), job)
 		ack, _ := wire.Encode(wire.TypeJobResult, result)
 		if err := cl.send(ctx, ack); err != nil {
 			return err
@@ -164,6 +175,20 @@ func (a *Agent) handleJob(ctx context.Context, job wire.Job) wire.JobResult {
 	payload, err := base64.StdEncoding.DecodeString(job.PayloadB64)
 	if err != nil {
 		return fail("bad payload encoding")
+	}
+	// The backend renders the receipt; how the paper FINISHES is ours. Its stream
+	// ends at the last printed row, which leaves the final lines inside the
+	// mechanism - tear there and you tear through the footer. The distance to the
+	// tear bar is a property of this chassis that no ESC/POS command reports, so it
+	// is measured per printer on this machine (Print file → Tear-off feed) and
+	// appended here, to backend receipts exactly as to locally printed ones.
+	//
+	// The cut goes the same way: whether this printer HAS a cutter is a fact about
+	// the chassis that nothing reports, so it is set on the printer here and off
+	// unless someone said otherwise.
+	if job.Kind == "escpos_raster" {
+		feed := imaging.MMToDots(a.TearOffMM(job.PrinterName))
+		payload = append(payload, imaging.Finish(feed, a.CutEnabled(job.PrinterName))...)
 	}
 	rec.Bytes = len(payload)
 

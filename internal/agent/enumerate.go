@@ -25,13 +25,25 @@ type PrinterInfo struct {
 	Location    string
 	Queued      int
 	Default     bool
+	Raw         bool // pass-through queue: it has no driver, so it prints bytes verbatim
+	// Placeholder marks the stand-in row shown when the OS reports no printers at
+	// all. It is NOT a queue: it cannot be printed to, set default, or removed, and
+	// treating it as one is how `lpadmin -x "Default Printer"` ended up being run
+	// against a name the spooler will not even accept.
+	Placeholder bool
 }
 
-// toWire projects the enriched set down to the backend contract.
+// toWire projects the enriched set down to the backend contract, dropping the
+// placeholder: it is a local hint that this PC has no printers, not a printer.
+// Advertising it would put a queue in the dashboard that can be tagged and routed
+// to, and every job sent there would fail at the counter with nothing to fix.
 func toWire(ps []PrinterInfo) []wire.Printer {
-	out := make([]wire.Printer, len(ps))
-	for i, p := range ps {
-		out[i] = wire.Printer{Name: p.Name, Description: p.Description}
+	out := make([]wire.Printer, 0, len(ps))
+	for _, p := range ps {
+		if p.Placeholder {
+			continue
+		}
+		out = append(out, wire.Printer{Name: p.Name, Description: p.Description})
 	}
 	return out
 }
@@ -51,8 +63,8 @@ func enumeratePrinters(ctx context.Context, fallback string) []PrinterInfo {
 	if len(printers) == 0 {
 		log.Printf("no OS printers found; advertising fallback %q", fallback)
 		return []PrinterInfo{{
-			Name: fallback, Description: "fallback (no OS printers detected)",
-			Status: "offline", Connection: "Wi-Fi",
+			Name: fallback, Description: "No printer is set up on this computer",
+			Status: "offline", Connection: "Wi-Fi", Placeholder: true,
 		}}
 	}
 	return printers
@@ -86,9 +98,10 @@ func enumerateCUPS(ctx context.Context) []PrinterInfo {
 			Queued:     queued[name],
 			Default:    name == defaultName,
 		}
-		model, location, reason := describeCUPS(ctx, name)
+		model, location, reason, raw := describeCUPS(ctx, name)
 		p.Description = model
 		p.Location = location
+		p.Raw = raw
 		if reason != "" {
 			p.Status = "error"
 			p.StateReason = reason
@@ -117,20 +130,30 @@ func cupsState(line string) string {
 	}
 }
 
-// describeCUPS returns a printer's make/model, location, and a human-readable
-// error note (from printer-state-reasons) via a single `lpoptions -p` call.
-func describeCUPS(ctx context.Context, name string) (model, location, reason string) {
+// describeCUPS returns a printer's make/model, location, a human-readable error
+// note (from printer-state-reasons) and whether the queue is a raw pass-through
+// one, via a single `lpoptions -p` call.
+func describeCUPS(ctx context.Context, name string) (model, location, reason string, raw bool) {
 	out, err := exec.CommandContext(ctx, "lpoptions", "-p", name).Output()
 	if err != nil {
-		return "", "", ""
+		return "", "", "", false
 	}
 	// lpoptions prints space-separated key=value tokens; values may be quoted and
 	// contain spaces, so scan on `key=` prefixes rather than naive field splits.
 	s := string(out)
 	model = cupsOpt(s, "printer-make-and-model")
+	// A raw queue (what the agent creates for pass-through devices) reports the
+	// placeholder model "Local Raw Printer"; its printer-info carries the real
+	// device label, so prefer that.
+	raw = strings.Contains(strings.ToLower(model), "raw")
+	if model == "" || raw {
+		if info := cupsOpt(s, "printer-info"); info != "" {
+			model = info
+		}
+	}
 	location = cupsOpt(s, "printer-location")
 	reason = reasonText(cupsOpt(s, "printer-state-reasons"))
-	return model, location, reason
+	return model, location, reason, raw
 }
 
 // cupsOpt extracts a single `key=value` option value, honoring single quotes.
@@ -284,9 +307,13 @@ func enumerateWindows(ctx context.Context) []PrinterInfo {
 			cols = append(cols, "")
 		}
 		name := strings.TrimSpace(cols[0])
+		driver := strings.TrimSpace(cols[1])
 		printers = append(printers, PrinterInfo{
-			Name:        name,
-			Description: strings.TrimSpace(cols[1]),
+			Name: name,
+			// "Generic / Text Only" is what the agent binds for pass-through
+			// devices on Windows, the counterpart of a raw CUPS queue.
+			Raw:         strings.Contains(strings.ToLower(driver), "text only"),
+			Description: driver,
 			Status:      windowsState(cols[2]),
 			Location:    strings.TrimSpace(cols[3]),
 			Connection:  windowsConn(cols[4]),

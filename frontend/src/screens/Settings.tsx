@@ -1,9 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { LogIn, Moon, Printer, RefreshCw, Sun, Trash2, Download } from 'lucide-react'
+import { LogIn, LogOut, Moon, Plug, Printer, RefreshCw, Sun, Trash2, Download } from 'lucide-react'
 import type { StateDTO } from '../lib/types'
 import { agent } from '../lib/agent'
-import { Button, Card, Segmented, Toggle } from '../components/primitives'
-import { Select, TextInput } from '../components/form'
+import { Button, Card, Segmented, StatusDot, Toggle } from '../components/primitives'
+import { ConfirmModal, Select, TextInput } from '../components/form'
 
 function trimV(v: string) {
   return v.startsWith('v') || v.startsWith('V') ? v.slice(1) : v
@@ -44,39 +44,77 @@ export function SettingsScreen({
   const [autostart, setAutostart] = useState(false)
   const [installed, setInstalled] = useState(false)
   const [server, setServer] = useState(state.server)
-  const [savedServer, setSavedServer] = useState(state.server)
+  const [disconnectOpen, setDisconnectOpen] = useState(false)
+  const [err, setErr] = useState('')
 
   useEffect(() => {
     agent.autostartEnabled().then(setAutostart)
     agent.isAppInstalled().then(setInstalled)
   }, [])
 
+  // Follow the agent's saved server: it can change from the pairing dialog or
+  // another window, and this field must never disagree with what the agent dials.
+  useEffect(() => setServer(state.server), [state.server])
+
   const printerNames = state.printers.map((p) => p.name)
+  const trimmedServer = server.trim()
+  const conn = state.connected
+    ? { label: 'Connected', tone: { text: 'text-teal-ink', dot: 'bg-teal' } }
+    : { label: 'Not connected', tone: { text: 'text-muted', dot: 'bg-muted2' } }
 
   return (
     <div className="h-full overflow-auto p-6">
       <div className="mx-auto flex max-w-[820px] flex-col gap-4">
         <Group title="CONNECTION">
-          <Row title="Backend server" desc="Where this agent sends heartbeats and receives jobs.">
+          <Row
+            title="Backend server"
+            desc="Where this agent sends heartbeats and receives jobs. Saving redials right away."
+          >
             <div className="flex items-center gap-2">
               <TextInput value={server} onChange={setServer} className="w-[240px]" />
               <Button
                 variant="secondary"
-                disabled={!server || server === savedServer}
+                disabled={!trimmedServer || trimmedServer === state.server}
                 onClick={() => {
-                  agent.setServer(server)
-                  setSavedServer(server)
+                  setErr('')
+                  agent.setServer(trimmedServer).catch((e) => setErr(String(e)))
                 }}
               >
                 Save
               </Button>
             </div>
           </Row>
-          <Row title="Enrollment" desc="Reconnect or pair this device again.">
-            <Button variant="primary" icon={LogIn} onClick={onReconnect}>
-              Reconnect
-            </Button>
+          <Row
+            title="Status"
+            desc={state.lastError || `This device is paired with ${state.server}.`}
+          >
+            <div className="flex items-center gap-3">
+              <StatusDot text={conn.label} tone={conn.tone} />
+              <Button
+                variant="secondary"
+                icon={Plug}
+                onClick={() => {
+                  setErr('')
+                  agent.reconnect().catch((e) => setErr(String(e)))
+                }}
+              >
+                Reconnect
+              </Button>
+            </div>
           </Row>
+          <Row title="Enrollment" desc="Pair this device again, or disconnect it from the backend.">
+            <div className="flex items-center gap-2">
+              <Button variant="primary" icon={LogIn} onClick={onReconnect}>
+                Pair again
+              </Button>
+              <Button variant="danger" icon={LogOut} onClick={() => setDisconnectOpen(true)}>
+                Disconnect
+              </Button>
+            </div>
+          </Row>
+          {err && (
+            <div className="px-4 py-3 text-[13px] font-semibold text-red-ink">{err}</div>
+          )}
         </Group>
 
         <Group title="GENERAL">
@@ -163,6 +201,19 @@ export function SettingsScreen({
           </div>
         </Group>
       </div>
+
+      <ConfirmModal
+        open={disconnectOpen}
+        onClose={() => setDisconnectOpen(false)}
+        onConfirm={() => {
+          setErr('')
+          agent.disconnect().catch((e) => setErr(String(e)))
+        }}
+        title="Disconnect from backend"
+        body={`This agent will stop talking to ${state.server} and forget its device token. Printers stay set up on this computer; pair again with a new code to resume printing.`}
+        confirmLabel="Disconnect"
+        danger
+      />
     </div>
   )
 }

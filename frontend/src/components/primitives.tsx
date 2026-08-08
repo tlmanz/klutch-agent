@@ -26,6 +26,7 @@ export function Button({
   disabled,
   full,
   className,
+  title,
   type = 'button',
 }: {
   children?: ReactNode
@@ -35,6 +36,7 @@ export function Button({
   disabled?: boolean
   full?: boolean
   className?: string
+  title?: string // tooltip + accessible name for icon-only buttons
   type?: 'button' | 'submit'
 }) {
   return (
@@ -42,6 +44,8 @@ export function Button({
       type={type}
       disabled={disabled}
       onClick={onClick}
+      title={title}
+      aria-label={title}
       className={cx(
         'inline-flex items-center justify-center gap-2 rounded-[10px] px-3.5 py-2 font-display text-[13px] font-bold transition',
         'disabled:cursor-not-allowed disabled:opacity-50',
@@ -104,6 +108,44 @@ export function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) =
         )}
       />
     </button>
+  )
+}
+
+// --- Slider -----------------------------------------------------------------
+
+// A range input tinted to the accent colour, used for the black & white
+// threshold where a number field would mean guessing at the value.
+export function Slider({
+  value,
+  min,
+  max,
+  onChange,
+  label,
+  showValue = true,
+}: {
+  value: number
+  min: number
+  max: number
+  onChange: (v: number) => void
+  label?: string
+  // showValue draws the number to the right of the track. Turn it off where the
+  // caller already shows the value in an editable field, so the same number is
+  // not printed twice.
+  showValue?: boolean
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        aria-label={label}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="h-1.5 w-full cursor-pointer rounded-full bg-surface2 accent-amber"
+      />
+      {showValue && <span className="w-9 shrink-0 text-right font-mono text-[12px] text-muted">{value}</span>}
+    </div>
   )
 }
 

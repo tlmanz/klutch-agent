@@ -7,6 +7,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -75,6 +76,23 @@ type Agent struct {
 	// can raise a desktop notification (respecting the user's prefs). The agent
 	// core stays UI-agnostic; it just fires the event.
 	outcomeHook func(store.JobRecord)
+
+	// runCtx is the process-lifetime context captured by Run. Job handling uses it
+	// rather than the per-connection context, so dropping the socket (a manual
+	// reconnect, a server change) never kills a print already on its way to the
+	// spooler. Guarded by mu.
+	runCtx context.Context
+
+	// connCancel tears down the live connection so the run loop redials at once;
+	// nil when nothing is connected. manualDrop records that the teardown was ours,
+	// so the resulting "context canceled" is not reported to the user as a fault.
+	// Both guarded by mu.
+	connCancel context.CancelFunc
+	manualDrop bool
+
+	// previews caches the last decoded local file so dragging a slider in the
+	// print screen does not re-decode a 12-megapixel photo on every frame.
+	previews previewCache
 
 	enrolled chan struct{} // signalled when a token becomes available or server changes
 
@@ -233,6 +251,10 @@ func (a *Agent) Run(ctx context.Context) {
 	if a.cfg.UpdateURL != "" {
 		go a.updateLoop(ctx)
 	}
+	a.mu.Lock()
+	a.runCtx = ctx
+	a.mu.Unlock()
+
 	backoff := time.Second
 	for ctx.Err() == nil {
 		a.mu.Lock()
@@ -248,16 +270,37 @@ func (a *Agent) Run(ctx context.Context) {
 			}
 		}
 
-		err := a.connect(ctx, server, tok)
+		// Each attempt gets its own context so Reconnect/Disconnect/SetServer can
+		// drop the socket without waiting for the backend to notice.
+		connCtx, cancel := context.WithCancel(ctx)
+		a.mu.Lock()
+		a.connCancel = cancel
+		a.mu.Unlock()
+
+		err := a.connect(connCtx, server, tok)
+		cancel()
+
+		a.mu.Lock()
+		a.connCancel = nil
+		manual := a.manualDrop
+		a.manualDrop = false
+		a.mu.Unlock()
+
 		if ctx.Err() != nil {
 			return
 		}
 		a.mutate(func(s *State) {
 			s.Connected = false
-			if err != nil {
+			if err != nil && !manual {
 				s.LastError = err.Error()
 			}
 		})
+		if manual {
+			// We closed it on purpose: redial straight away, and do not blame the
+			// connection for the "context canceled" that resulted.
+			backoff = time.Second
+			continue
+		}
 		if err != nil {
 			a.log.Printf("connection ended: %v (retrying in %s)", err, backoff)
 		}
@@ -265,7 +308,7 @@ func (a *Agent) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(backoff):
-		case <-a.enrolled: // server changed; reconnect immediately
+		case <-a.enrolled: // enrolled, or the server changed; reconnect immediately
 		}
 		if backoff < 30*time.Second {
 			backoff *= 2
@@ -273,6 +316,67 @@ func (a *Agent) Run(ctx context.Context) {
 			backoff = time.Second
 		}
 	}
+}
+
+// dropConnection closes the live connection, if there is one, so the run loop
+// redials immediately. Callers that also changed the token or server should call
+// wake afterwards, which covers the case where nothing was connected.
+func (a *Agent) dropConnection() {
+	a.mu.Lock()
+	cancel := a.connCancel
+	a.connCancel = nil
+	a.manualDrop = cancel != nil
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// jobCtx is the context job handling runs under: the process lifetime, not the
+// current connection, so a reconnect cannot cancel a print mid-dispatch.
+func (a *Agent) jobCtx() context.Context {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.runCtx != nil {
+		return a.runCtx
+	}
+	return context.Background()
+}
+
+// Reconnect drops the current connection and dials the backend again with the
+// token this device already has. It is the "it went quiet, try again now" button;
+// re-pairing is only needed when the token itself is gone.
+func (a *Agent) Reconnect() error {
+	a.mu.Lock()
+	tok := a.token
+	a.mu.Unlock()
+	if tok == "" {
+		return fmt.Errorf("this device is not paired yet")
+	}
+	a.mutate(func(s *State) { s.LastError = "" })
+	a.dropConnection()
+	a.wake()
+	return nil
+}
+
+// Disconnect unpairs the device: it forgets the token, closes the connection and
+// stops redialing. The UI falls back to onboarding, where the (still persisted)
+// server URL can be re-paired or pointed somewhere else.
+func (a *Agent) Disconnect() error {
+	if err := a.store.SetSetting(store.KeyToken, ""); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.token = ""
+	a.mu.Unlock()
+	a.mutate(func(s *State) {
+		s.Enrolled = false
+		s.Connected = false
+		s.LastError = ""
+	})
+	a.dropConnection()
+	a.log.Printf("disconnected from backend; device token cleared")
+	return nil
 }
 
 // Enroll redeems a one-time pairing code for a device token, persists it, and
@@ -295,6 +399,7 @@ func (a *Agent) Enroll(ctx context.Context, pairingCode string) error {
 	a.state.LastError = ""
 	a.mu.Unlock()
 	a.notify()
+	a.dropConnection() // an existing socket still carries the old token
 	a.wake()
 	return nil
 }
@@ -312,19 +417,26 @@ func (a *Agent) SetToken(token string) error {
 	a.state.LastError = ""
 	a.mu.Unlock()
 	a.notify()
+	a.dropConnection()
 	a.wake()
 	return nil
 }
 
-// SetServer changes the backend URL, persists it, and forces a reconnect.
+// SetServer changes the backend URL, persists it, and forces a reconnect: the
+// live socket is closed so the next dial goes to the new address instead of
+// waiting for the old one to fail on its own.
 func (a *Agent) SetServer(server string) error {
 	if err := a.store.SetSetting(store.KeyServer, server); err != nil {
 		return err
 	}
-	a.mutate(func(s *State) { s.Server = server })
+	a.mutate(func(s *State) {
+		s.Server = server
+		s.LastError = ""
+	})
 	a.mu.Lock()
 	a.cfg.Server = server
 	a.mu.Unlock()
+	a.dropConnection()
 	a.wake()
 	return nil
 }
@@ -348,6 +460,9 @@ func (a *Agent) SetAutoUpdate(on bool) error {
 // SetDefaultPrinter pins the OS default queue, persists the choice, and reflects
 // it in state immediately (the next enumeration confirms it).
 func (a *Agent) SetDefaultPrinter(name string) error {
+	if a.isPlaceholder(name) {
+		return fmt.Errorf("%q is not a printer on this computer - it is a placeholder shown because none is set up", name)
+	}
 	if err := setDefaultPrinter(context.Background(), name); err != nil {
 		return err
 	}

@@ -14,6 +14,13 @@ import (
 // handle (CUPS request id) when one is available so the job can be tracked and
 // controlled; on Windows the PrintTo verb yields no handle and it returns "".
 func dispatch(ctx context.Context, printer, path string) (reqID string, err error) {
+	return dispatchFile(ctx, printer, path, nil)
+}
+
+// dispatchFile is dispatch with extra spooler options (`lp -o fit-to-page`,
+// `-n <copies>`, …), used by local printing where the operator chooses them.
+// Windows has no equivalent for the PrintTo verb, so they are ignored there.
+func dispatchFile(ctx context.Context, printer, path string, opts []string) (reqID string, err error) {
 	if strings.TrimSpace(printer) == "" {
 		return "", fmt.Errorf("job has no target printer")
 	}
@@ -21,15 +28,17 @@ func dispatch(ctx context.Context, printer, path string) (reqID string, err erro
 	case "windows":
 		return "", dispatchWindows(ctx, printer, path)
 	default:
-		return dispatchCUPS(ctx, printer, path)
+		return dispatchCUPS(ctx, printer, path, opts)
 	}
 }
 
 // dispatchCUPS submits the file to a CUPS queue via `lp -d <printer> <path>`
 // (Linux/macOS) and parses the request id from lp's output ("request id is
 // Printer-42 (1 file(s))"). A raw queue forwards the bytes verbatim.
-func dispatchCUPS(ctx context.Context, printer, path string) (string, error) {
-	out, err := exec.CommandContext(ctx, "lp", "-d", printer, path).CombinedOutput()
+func dispatchCUPS(ctx context.Context, printer, path string, opts []string) (string, error) {
+	args := append([]string{"-d", printer}, opts...)
+	args = append(args, path)
+	out, err := exec.CommandContext(ctx, "lp", args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("lp: %v: %s", err, strings.TrimSpace(string(out)))
 	}

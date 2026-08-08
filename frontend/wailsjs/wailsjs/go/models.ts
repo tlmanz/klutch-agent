@@ -1,5 +1,31 @@
 export namespace desktopapp {
 	
+	export class DeviceDTO {
+	    uri: string;
+	    name: string;
+	    info: string;
+	    makeModel: string;
+	    connection: string;
+	    driver: string;
+	    installed: boolean;
+	    queue: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DeviceDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uri = source["uri"];
+	        this.name = source["name"];
+	        this.info = source["info"];
+	        this.makeModel = source["makeModel"];
+	        this.connection = source["connection"];
+	        this.driver = source["driver"];
+	        this.installed = source["installed"];
+	        this.queue = source["queue"];
+	    }
+	}
 	export class JobDTO {
 	    id: string;
 	    printer: string;
@@ -46,15 +72,91 @@ export namespace desktopapp {
 	        this.finishedAt = source["finishedAt"];
 	    }
 	}
+	export class PreviewDTO {
+	    dataUrl: string;
+	    width: number;
+	    height: number;
+	    srcWidth: number;
+	    srcHeight: number;
+	    format: string;
+	    printable: boolean;
+	    image: boolean;
+	    note: string;
+	    raw: boolean;
+	    tearOffMm: number;
+	    tearOffPx: number;
+	    lengthMm: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PreviewDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.dataUrl = source["dataUrl"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.srcWidth = source["srcWidth"];
+	        this.srcHeight = source["srcHeight"];
+	        this.format = source["format"];
+	        this.printable = source["printable"];
+	        this.image = source["image"];
+	        this.note = source["note"];
+	        this.raw = source["raw"];
+	        this.tearOffMm = source["tearOffMm"];
+	        this.tearOffPx = source["tearOffPx"];
+	        this.lengthMm = source["lengthMm"];
+	    }
+	}
+	export class PrintOptionsDTO {
+	    path: string;
+	    printer: string;
+	    mode: string;
+	    dither: boolean;
+	    threshold: number;
+	    rotate: number;
+	    invert: boolean;
+	    widthPx: number;
+	    copies: number;
+	    cut: boolean;
+	    tearOffMm: number;
+	    align: number;
+	    media: string;
+	    fitToPage: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PrintOptionsDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.printer = source["printer"];
+	        this.mode = source["mode"];
+	        this.dither = source["dither"];
+	        this.threshold = source["threshold"];
+	        this.rotate = source["rotate"];
+	        this.invert = source["invert"];
+	        this.widthPx = source["widthPx"];
+	        this.copies = source["copies"];
+	        this.cut = source["cut"];
+	        this.tearOffMm = source["tearOffMm"];
+	        this.align = source["align"];
+	        this.media = source["media"];
+	        this.fitToPage = source["fitToPage"];
+	    }
+	}
 	export class PrinterDTO {
 	    name: string;
 	    model: string;
+	    raw: boolean;
 	    status: string;
 	    stateReason: string;
 	    connection: string;
 	    location: string;
 	    queued: number;
 	    default: boolean;
+	    placeholder: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PrinterDTO(source);
@@ -64,12 +166,14 @@ export namespace desktopapp {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.model = source["model"];
+	        this.raw = source["raw"];
 	        this.status = source["status"];
 	        this.stateReason = source["stateReason"];
 	        this.connection = source["connection"];
 	        this.location = source["location"];
 	        this.queued = source["queued"];
 	        this.default = source["default"];
+	        this.placeholder = source["placeholder"];
 	    }
 	}
 	export class StateDTO {

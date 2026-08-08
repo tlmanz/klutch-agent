@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { agent } from '../lib/agent'
 import { Button, Segmented } from './primitives'
 import { Modal, TextArea, TextInput } from './form'
 
-// The first-run / re-connect wizard. Collects the backend URL and connects via a
-// one-time pairing code or a pre-issued device token, in one consistent modal
-// (replacing Fyne's dialog with mismatched inputs/buttons).
+// The pairing wizard. Collects the backend URL and connects via a one-time
+// pairing code or a pre-issued device token, in one consistent modal (replacing
+// Fyne's dialog with mismatched inputs/buttons).
 export function EnrollModal({
   open,
   onClose,
@@ -21,6 +21,17 @@ export function EnrollModal({
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+
+  // The modal stays mounted for the life of the window, so seeding state once
+  // would pin it to whatever the server was at startup: every open re-reads the
+  // saved URL, which is what Settings shows and what the agent actually dials.
+  useEffect(() => {
+    if (!open) return
+    setServer(defaultServer)
+    setCode('')
+    setToken('')
+    setErr('')
+  }, [open, defaultServer])
 
   const connect = async () => {
     setErr('')
@@ -43,7 +54,7 @@ export function EnrollModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Set up this agent"
+      title="Pair this agent"
       width={480}
       footer={
         <>
@@ -60,6 +71,11 @@ export function EnrollModal({
         <div>
           <label className="mb-1.5 block text-[13px] font-bold text-text">Backend server</label>
           <TextInput value={server} onChange={setServer} placeholder="https://api.example.com" />
+          <div className="mt-1.5 text-[11px] text-muted">
+            {server === defaultServer
+              ? 'The saved backend. Edit it to pair against a different one.'
+              : `Saving will replace the current backend (${defaultServer}).`}
+          </div>
         </div>
         <div>
           <label className="mb-1.5 block text-[13px] font-bold text-text">Connect using</label>

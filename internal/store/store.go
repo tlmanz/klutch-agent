@@ -32,6 +32,17 @@ const (
 	KeyNotifyWeekly   = "notify_weekly"   // "1" / "0" - weekly summary
 )
 
+// KeyTearOff is the settings key holding a receipt printer's tear-off feed in
+// millimetres. It is per printer because the distance between the print head and
+// the tear bar is a property of that chassis.
+func KeyTearOff(printer string) string { return "tear_off_mm:" + printer }
+
+// KeyCut holds whether a receipt printer should cut the paper when a job ends
+// ("1"/"0"). Per printer because having a cutter is a property of the chassis,
+// and nothing reports it: a printer without one silently ignores the command, so
+// the answer has to come from whoever is looking at the machine.
+func KeyCut(printer string) string { return "cut:" + printer }
+
 // Store is a handle to the agent's SQLite database.
 type Store struct {
 	db *sql.DB
@@ -184,6 +195,14 @@ func (s *Store) UpsertPrinters(printers []PrinterRecord) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// DeletePrinter forgets a printer. Called when the operator removes a queue from
+// the OS, so the deleted printer does not come back when the UI seeds its state
+// from the store on the next launch.
+func (s *Store) DeletePrinter(name string) error {
+	_, err := s.db.Exec(`DELETE FROM printers WHERE name = ?`, name)
+	return err
 }
 
 // Printers returns every printer ever advertised, most recently seen first.

@@ -1,4 +1,4 @@
-import { Download, Layers, Printer, Settings, type LucideIcon } from 'lucide-react'
+import { Download, FileImage, Layers, Printer, Settings, type LucideIcon } from 'lucide-react'
 import type { StateDTO } from '../lib/types'
 import { cx } from './primitives'
 import { Logo } from './Logo'
@@ -6,6 +6,7 @@ import type { ScreenId } from '../lib/screens'
 
 const NAV: { id: ScreenId; label: string; icon: LucideIcon }[] = [
   { id: 'printers', label: 'Printers', icon: Printer },
+  { id: 'print', label: 'Print a file', icon: FileImage },
   { id: 'jobs', label: 'Jobs', icon: Layers },
   { id: 'updates', label: 'Updates', icon: Download },
   { id: 'settings', label: 'Settings', icon: Settings },

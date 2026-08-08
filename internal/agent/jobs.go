@@ -357,6 +357,8 @@ func extFor(kind string) string {
 		return "pdf"
 	case "escpos_raster":
 		return "escpos"
+	case "image":
+		return "png"
 	default:
 		return "bin"
 	}

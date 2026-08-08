@@ -2,18 +2,20 @@ import { useEffect, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { Header } from './components/Header'
 import { PrintersScreen } from './screens/Printers'
+import { PrintFileScreen } from './screens/PrintFile'
 import { JobsScreen } from './screens/Jobs'
 import { UpdatesScreen } from './screens/Updates'
 import { SettingsScreen } from './screens/Settings'
 import { Onboarding } from './screens/Onboarding'
 import { Install } from './screens/Install'
 import { EnrollModal } from './components/EnrollModal'
+import { AddPrinterModal } from './components/AddPrinterModal'
 import { CompactPanel } from './components/CompactPanel'
 import { ConfirmModal } from './components/form'
 import { useAgentState } from './lib/useAgentState'
 import { agent } from './lib/agent'
 import { onEvent, windowSetSize } from './lib/runtime'
-import { SCREEN_TITLES, type ScreenId } from './lib/screens'
+import { SCREEN_ORDER, SCREEN_TITLES, type ScreenId } from './lib/screens'
 
 // The URL hash seeds the initial view (used by the screenshot harness, harmless
 // in the webview): #jobs, #onboarding, #install, #compact, …
@@ -21,7 +23,7 @@ const hash = () => window.location.hash.replace('#', '')
 
 function hashScreen(): ScreenId {
   const h = hash() as ScreenId
-  return (['printers', 'jobs', 'updates', 'settings'] as ScreenId[]).includes(h) ? h : 'printers'
+  return SCREEN_ORDER.includes(h) ? h : 'printers'
 }
 
 export default function App() {
@@ -30,6 +32,7 @@ export default function App() {
   const [search, setSearch] = useState('')
   const [jobFilter, setJobFilter] = useState('all')
   const [enrollOpen, setEnrollOpen] = useState(false)
+  const [addPrinterOpen, setAddPrinterOpen] = useState(false)
   const [updateOpen, setUpdateOpen] = useState(false)
   const [installOpen, setInstallOpen] = useState(hash() === 'install')
   const [installChecked, setInstallChecked] = useState(false)
@@ -100,10 +103,11 @@ export default function App() {
             <PrintersScreen
               state={state}
               search={search}
-              onAddPrinter={() => setEnrollOpen(true)}
+              onAddPrinter={() => setAddPrinterOpen(true)}
               onOpenQueue={() => setScreen('jobs')}
             />
           )}
+          {screen === 'print' && <PrintFileScreen state={state} />}
           {screen === 'jobs' && (
             <JobsScreen state={state} search={search} filter={jobFilter} onFilter={setJobFilter} />
           )}
@@ -122,6 +126,7 @@ export default function App() {
       </div>
 
       <EnrollModal open={enrollOpen} onClose={() => setEnrollOpen(false)} defaultServer={state.server} />
+      <AddPrinterModal open={addPrinterOpen} onClose={() => setAddPrinterOpen(false)} />
       <Install open={installOpen} onClose={() => setInstallOpen(false)} version={state.version} />
       <ConfirmModal
         open={updateOpen}

@@ -4,6 +4,8 @@ import {desktopapp} from '../models';
 
 export function Activate():Promise<void>;
 
+export function AddPrinter(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function ApplyUpdate():Promise<void>;
 
 export function AutostartEnabled():Promise<boolean>;
@@ -11,6 +13,12 @@ export function AutostartEnabled():Promise<boolean>;
 export function CancelJob(arg1:string):Promise<void>;
 
 export function CheckForUpdate():Promise<string>;
+
+export function CutEnabled(arg1:string):Promise<boolean>;
+
+export function Disconnect():Promise<void>;
+
+export function DiscoverDevices():Promise<Array<desktopapp.DeviceDTO>>;
 
 export function Enroll(arg1:string):Promise<void>;
 
@@ -24,6 +32,16 @@ export function PauseAll():Promise<void>;
 
 export function PauseJob(arg1:string):Promise<void>;
 
+export function PickFile():Promise<string>;
+
+export function PreviewLocalFile(arg1:desktopapp.PrintOptionsDTO):Promise<desktopapp.PreviewDTO>;
+
+export function PrintLocalFile(arg1:desktopapp.PrintOptionsDTO):Promise<string>;
+
+export function Reconnect():Promise<void>;
+
+export function RemovePrinter(arg1:string):Promise<void>;
+
 export function ReprintJob(arg1:string):Promise<void>;
 
 export function ResumeJob(arg1:string):Promise<void>;
@@ -31,6 +49,8 @@ export function ResumeJob(arg1:string):Promise<void>;
 export function SetAutoUpdate(arg1:boolean):Promise<void>;
 
 export function SetAutostart(arg1:boolean):Promise<void>;
+
+export function SetCutEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetDefaultPrinter(arg1:string):Promise<void>;
 
@@ -42,8 +62,12 @@ export function SetNotifyWeekly(arg1:boolean):Promise<void>;
 
 export function SetServer(arg1:string):Promise<void>;
 
+export function SetTearOffMM(arg1:string,arg2:number):Promise<void>;
+
 export function SetTheme(arg1:string):Promise<void>;
 
 export function SetToken(arg1:string):Promise<void>;
+
+export function TearOffMM(arg1:string):Promise<number>;
 
 export function UninstallApp():Promise<void>;

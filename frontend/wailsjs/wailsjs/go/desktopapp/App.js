@@ -6,6 +6,10 @@ export function Activate() {
   return window['go']['desktopapp']['App']['Activate']();
 }
 
+export function AddPrinter(arg1, arg2, arg3) {
+  return window['go']['desktopapp']['App']['AddPrinter'](arg1, arg2, arg3);
+}
+
 export function ApplyUpdate() {
   return window['go']['desktopapp']['App']['ApplyUpdate']();
 }
@@ -20,6 +24,18 @@ export function CancelJob(arg1) {
 
 export function CheckForUpdate() {
   return window['go']['desktopapp']['App']['CheckForUpdate']();
+}
+
+export function CutEnabled(arg1) {
+  return window['go']['desktopapp']['App']['CutEnabled'](arg1);
+}
+
+export function Disconnect() {
+  return window['go']['desktopapp']['App']['Disconnect']();
+}
+
+export function DiscoverDevices() {
+  return window['go']['desktopapp']['App']['DiscoverDevices']();
 }
 
 export function Enroll(arg1) {
@@ -46,6 +62,26 @@ export function PauseJob(arg1) {
   return window['go']['desktopapp']['App']['PauseJob'](arg1);
 }
 
+export function PickFile() {
+  return window['go']['desktopapp']['App']['PickFile']();
+}
+
+export function PreviewLocalFile(arg1) {
+  return window['go']['desktopapp']['App']['PreviewLocalFile'](arg1);
+}
+
+export function PrintLocalFile(arg1) {
+  return window['go']['desktopapp']['App']['PrintLocalFile'](arg1);
+}
+
+export function Reconnect() {
+  return window['go']['desktopapp']['App']['Reconnect']();
+}
+
+export function RemovePrinter(arg1) {
+  return window['go']['desktopapp']['App']['RemovePrinter'](arg1);
+}
+
 export function ReprintJob(arg1) {
   return window['go']['desktopapp']['App']['ReprintJob'](arg1);
 }
@@ -60,6 +96,10 @@ export function SetAutoUpdate(arg1) {
 
 export function SetAutostart(arg1) {
   return window['go']['desktopapp']['App']['SetAutostart'](arg1);
+}
+
+export function SetCutEnabled(arg1, arg2) {
+  return window['go']['desktopapp']['App']['SetCutEnabled'](arg1, arg2);
 }
 
 export function SetDefaultPrinter(arg1) {
@@ -82,12 +122,20 @@ export function SetServer(arg1) {
   return window['go']['desktopapp']['App']['SetServer'](arg1);
 }
 
+export function SetTearOffMM(arg1, arg2) {
+  return window['go']['desktopapp']['App']['SetTearOffMM'](arg1, arg2);
+}
+
 export function SetTheme(arg1) {
   return window['go']['desktopapp']['App']['SetTheme'](arg1);
 }
 
 export function SetToken(arg1) {
   return window['go']['desktopapp']['App']['SetToken'](arg1);
+}
+
+export function TearOffMM(arg1) {
+  return window['go']['desktopapp']['App']['TearOffMM'](arg1);
 }
 
 export function UninstallApp() {

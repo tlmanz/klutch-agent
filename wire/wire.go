@@ -53,8 +53,17 @@ type Printer struct {
 // The same shape is reused for TypePrinters, which the agent re-sends ONLY when
 // its enumerated printer set changes (a printer plugged/unplugged or its port
 // changed); not on every poll. The server reconciles both identically.
+//
+// Machine/OS/Version are host facts the agent reports about itself, shown on the
+// dashboard's agent detail screen. They are OPTIONAL and omitempty: an older
+// agent omits them and the server keeps whatever it last stored, so this field
+// set stays byte-compatible in both directions. Being self-reported they are
+// display-only - never trusted for routing or authorization.
 type Hello struct {
 	Printers []Printer `json:"printers"`
+	Machine  string    `json:"machine,omitempty"` // host / computer name
+	OS       string    `json:"os,omitempty"`      // e.g. "Windows 11", "Ubuntu 24.04"
+	Version  string    `json:"version,omitempty"` // agent build, e.g. "v1.4.2"
 }
 
 // Job is a print job pushed to the agent. Payload is base64 (the rendered PDF or

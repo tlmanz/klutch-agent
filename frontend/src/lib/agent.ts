@@ -1,5 +1,5 @@
-import type { StateDTO } from './types'
-import { mockState } from './mock'
+import type { DeviceDTO, PreviewDTO, PrintOptionsDTO, StateDTO } from './types'
+import { mockDevices, mockPreview, mockState } from './mock'
 
 // Typed surface of the Go App bound by Wails (window.go.desktopapp.App). When the
 // Wails runtime is absent (plain browser / headless-Chrome dev), we fall back to
@@ -9,7 +9,19 @@ interface AppBindings {
   SetServer(url: string): Promise<void>
   Enroll(code: string): Promise<void>
   SetToken(token: string): Promise<void>
+  Reconnect(): Promise<void>
+  Disconnect(): Promise<void>
   SetDefaultPrinter(name: string): Promise<void>
+  DiscoverDevices(): Promise<DeviceDTO[]>
+  AddPrinter(name: string, uri: string, driver: string): Promise<void>
+  RemovePrinter(name: string): Promise<void>
+  PickFile(): Promise<string>
+  TearOffMM(printer: string): Promise<number>
+  SetTearOffMM(printer: string, mm: number): Promise<void>
+  CutEnabled(printer: string): Promise<boolean>
+  SetCutEnabled(printer: string, on: boolean): Promise<void>
+  PreviewLocalFile(o: PrintOptionsDTO): Promise<PreviewDTO>
+  PrintLocalFile(o: PrintOptionsDTO): Promise<string>
   SetTheme(theme: string): Promise<void>
   SetAutoUpdate(on: boolean): Promise<void>
   SetNotifyDone(on: boolean): Promise<void>
@@ -102,11 +114,56 @@ export const agent = {
   setServer: (url: string) => call((a) => a.SetServer(url), (s) => (s.server = url)),
   enroll: (code: string) => call((a) => a.Enroll(code), (s) => (s.enrolled = true)),
   setToken: (t: string) => call((a) => a.SetToken(t), (s) => (s.enrolled = true)),
+  reconnect: () => call((a) => a.Reconnect(), (s) => (s.connected = true)),
+  disconnect: () =>
+    call((a) => a.Disconnect(), (s) => {
+      s.enrolled = false
+      s.connected = false
+      s.lastError = ''
+    }),
   setDefaultPrinter: (name: string) =>
     call((a) => a.SetDefaultPrinter(name), (s) => {
       s.defaultPrinter = name
       s.printers.forEach((p) => (p.default = p.name === name))
     }),
+  discoverDevices: () => call<DeviceDTO[]>((a) => a.DiscoverDevices(), undefined, clone(mockDevices)),
+  addPrinter: (name: string, uri: string, driver: string) =>
+    call((a) => a.AddPrinter(name, uri, driver), (s) => {
+      const dev = mockDevices.find((d) => d.uri === uri)
+      s.printers.push({
+        name,
+        model: dev?.makeModel || dev?.info || 'Printer',
+        raw: (dev?.driver ?? 'raw') === 'raw',
+        status: 'online',
+        stateReason: '',
+        connection: dev?.connection || 'USB',
+        location: '',
+        queued: 0,
+        default: false,
+      })
+    }),
+  removePrinter: (name: string) =>
+    call((a) => a.RemovePrinter(name), (s) => {
+      s.printers = s.printers.filter((p) => p.name !== name)
+    }),
+  pickFile: () => call<string>((a) => a.PickFile(), undefined, '/home/demo/Pictures/receipt-logo.png'),
+  tearOffMM: (printer: string) => call<number>((a) => a.TearOffMM(printer), undefined, 30),
+  setTearOffMM: (printer: string, mm: number) => call((a) => a.SetTearOffMM(printer, mm)),
+  cutEnabled: (printer: string) => call<boolean>((a) => a.CutEnabled(printer), undefined, false),
+  setCutEnabled: (printer: string, on: boolean) => call((a) => a.SetCutEnabled(printer, on)),
+  previewLocalFile: (o: PrintOptionsDTO) =>
+    call<PreviewDTO>((a) => a.PreviewLocalFile(o), undefined, mockPreview(o)),
+  printLocalFile: (o: PrintOptionsDTO) =>
+    call<string>((a) => a.PrintLocalFile(o), (s) => {
+      s.activeJobs.unshift({
+        id: `local-${s.activeJobs.length}`,
+        printer: o.printer,
+        doc: o.path.split('/').pop() || 'file',
+        kind: o.mode === 'mono' ? 'escpos_raster' : 'image',
+        state: 'printing',
+        percent: -1,
+      })
+    }, 'local-mock'),
   setTheme: (theme: string) => call((a) => a.SetTheme(theme), (s) => (s.theme = theme)),
   setAutoUpdate: (on: boolean) => call((a) => a.SetAutoUpdate(on), (s) => (s.autoUpdate = on)),
   setNotifyDone: (on: boolean) => call((a) => a.SetNotifyDone(on), (s) => (s.notifyDone = on)),
