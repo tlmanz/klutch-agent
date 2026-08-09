@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -57,19 +58,59 @@ func parseRequestID(out string) string {
 	return ""
 }
 
-// dispatchWindows submits the file to a named Windows printer via PowerShell.
-// PrintTo hands the file to the spooler for the named queue; -Wait blocks until
-// it is submitted so an exec failure surfaces as a real dispatch error. Both
-// arguments are single-quoted for PowerShell rather than %q-escaped: the spool
-// path is a Windows path, and %q would double every backslash in it.
+// rawPayloads are the spool-file kinds that are already written in the printer's
+// own language, because the backend (or the agent's own ESC/POS encoder)
+// rendered them. Nothing may interpret these bytes on the way to the device.
+var rawPayloads = map[string]bool{
+	".escpos": true, // ESC/POS receipt raster, produced by internal/imaging
+	".bin":    true, // any payload kind the backend did not label
+	".prn":    true,
+	".raw":    true,
+	".zpl":    true,
+	".epl":    true,
+	".cpcl":   true,
+}
+
+// dispatchWindows submits the file to a named Windows printer.
+//
+// A raw payload goes straight into the spooler as a RAW job (printRaw). It
+// cannot go through the shell: `Start-Process -Verb PrintTo` asks Windows for an
+// application registered to print the file, and no application prints an ESC/POS
+// byte stream — the shell answers "No application is associated with the
+// specified file for this operation" and the receipt never prints.
+//
+// Anything that still needs laying out (a PDF, an image) does go through
+// PrintTo, which hands it to the application that owns the file type; -Wait
+// blocks until it is submitted so a failure surfaces as a real dispatch error.
+// Both arguments are single-quoted for PowerShell rather than %q-escaped: the
+// spool path is a Windows path, and %q would double every backslash in it.
 func dispatchWindows(ctx context.Context, printer, path string) error {
+	if rawPayloads[strings.ToLower(filepath.Ext(path))] {
+		return printRaw(printer, path, docName(path))
+	}
 	ps := fmt.Sprintf("Start-Process -FilePath %s -Verb PrintTo -ArgumentList %s -Wait",
 		oscmd.Quote(path), oscmd.Quote(printer))
 	out, err := oscmd.PowerShell(ctx, ps).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("powershell print: %v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("%s", windowsPrintError(tidyPSError(string(out), err), path))
 	}
 	return nil
+}
+
+// windowsPrintError explains the one failure an operator can do something about:
+// Windows has no application registered to print this file type without opening
+// it, so the shell refuses before the spooler is ever reached.
+func windowsPrintError(msg, path string) string {
+	if strings.Contains(strings.ToLower(msg), "no application is associated") {
+		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+		if ext == "" {
+			ext = "this kind of"
+		}
+		return "Windows has no application registered to print " + ext +
+			" files without opening them. Install one that supports \"Print to\" (Adobe Acrobat Reader for PDFs), " +
+			"or use a receipt printer, whose jobs the agent sends to the spooler directly."
+	}
+	return "powershell print: " + msg
 }
 
 // --- job controls (best-effort, CUPS only) ----------------------------------
