@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 // Real `lpinfo -l -v` output: a plugged-in ESC/POS receipt printer with no queue,
 // a queue-backed network printer, and the bare backend names CUPS always lists.
@@ -106,6 +110,57 @@ func TestValidQueueName(t *testing.T) {
 		if err := validQueueName(bad); err == nil {
 			t.Errorf("validQueueName(%q) = nil, want an error", bad)
 		}
+	}
+}
+
+// The exact text Add-Printer produced on a PC with no "Generic / Text Only"
+// driver installed — the blob the Add-printer dialog used to show verbatim.
+const addPrinterErr = `Add-Printer : The specified driver does not exist. Use add-printerdriver to add a new driver, or specify an
+existing driver.
+At line:1 char:1
++ Add-Printer -Name "Printer" -DriverName "Generic / Text Only" -PortNa ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (MSFT_Printer:ROOT/StandardCimv2/MSFT_Printer) [Add-Printer], CimException
+    + FullyQualifiedErrorId : HRESULT 0x80070705,Add-Printer
+`
+
+func TestTidyPSError(t *testing.T) {
+	got := tidyPSError(addPrinterErr, nil)
+	if strings.Contains(got, "At line:") || strings.Contains(got, "CategoryInfo") {
+		t.Errorf("the source echo and CategoryInfo block must be dropped, got %q", got)
+	}
+	// The HRESULT is the one token worth keeping from the tail: it is what
+	// windowsPrinterError matches on.
+	if !strings.Contains(got, "0x80070705") {
+		t.Errorf("the HRESULT must survive, got %q", got)
+	}
+	if got := tidyPSError("   ", errors.New("exit status 1")); got != "exit status 1" {
+		t.Errorf("with no output the exec error is all we have, got %q", got)
+	}
+}
+
+func TestWindowsPrinterError(t *testing.T) {
+	msg := windowsPrinterError(tidyPSError(addPrinterErr, nil))
+	if !strings.Contains(msg, winRawDriver) || !strings.Contains(msg, "Add manually") {
+		t.Errorf("a missing driver must tell the operator how to install it, got %q", msg)
+	}
+	if msg := windowsPrinterError("Add-Printer : Access is denied."); !strings.Contains(msg, "administrator") {
+		t.Errorf("access denied must point at elevation, got %q", msg)
+	}
+	// Anything we do not recognise is passed through rather than swallowed.
+	if msg := windowsPrinterError("the spooler exploded"); msg != "the spooler exploded" {
+		t.Errorf("unknown errors must pass through, got %q", msg)
+	}
+}
+
+func TestNeedsElevation(t *testing.T) {
+	for _, yes := range []string{"Access is denied.", "HRESULT 0x80070005", "The requested operation requires elevation."} {
+		if !needsElevation(yes) {
+			t.Errorf("needsElevation(%q) = false, want true", yes)
+		}
+	}
+	if needsElevation("The specified driver does not exist.") {
+		t.Error("a missing driver is not an elevation problem; retrying as admin would only re-fail")
 	}
 }
 

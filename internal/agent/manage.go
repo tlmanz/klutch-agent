@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/tlmanz/klutch-agent/internal/oscmd"
 )
 
 // This file covers printer *administration*: discovering devices the OS can see
@@ -117,8 +119,7 @@ func (a *Agent) RemovePrinter(ctx context.Context, name string) error {
 	}
 	var err error
 	if runtime.GOOS == "windows" {
-		err = adminRun(ctx, "powershell", "-NoProfile", "-Command",
-			fmt.Sprintf("Remove-Printer -Name %q", name))
+		err = psRun(ctx, fmt.Sprintf("Remove-Printer -Name %s -ErrorAction Stop", oscmd.Quote(name)))
 	} else {
 		err = adminRun(ctx, lpadminPath(), "-x", name)
 	}
@@ -341,14 +342,14 @@ func lpadminPath() string {
 // failure is an authorisation one we retry through pkexec, which raises the
 // desktop's own authentication dialog.
 func adminRun(ctx context.Context, name string, args ...string) error {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := oscmd.Command(ctx, name, args...).CombinedOutput()
 	if err == nil {
 		return nil
 	}
 	msg := strings.TrimSpace(string(out))
 	if runtime.GOOS == "linux" && needsAuth(msg) {
 		if pk, lerr := exec.LookPath("pkexec"); lerr == nil {
-			out2, err2 := exec.CommandContext(ctx, pk, append([]string{name}, args...)...).CombinedOutput()
+			out2, err2 := oscmd.Command(ctx, pk, append([]string{name}, args...)...).CombinedOutput()
 			if err2 == nil {
 				return nil
 			}
@@ -381,7 +382,7 @@ func needsAuth(msg string) bool {
 func discoverWindows(ctx context.Context) ([]DeviceInfo, error) {
 	script := `$used = @(Get-Printer | ForEach-Object { $_.PortName }); ` +
 		`Get-PrinterPort | ForEach-Object { "$($_.Name)|$($_.Description)|$(if ($used -contains $_.Name) { 'yes' } else { 'no' })" }`
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", script).Output()
+	out, err := oscmd.PowerShell(ctx, script).Output()
 	if err != nil {
 		return nil, fmt.Errorf("Get-PrinterPort: %w", err)
 	}
@@ -405,13 +406,145 @@ func discoverWindows(ctx context.Context) ([]DeviceInfo, error) {
 	return devs, nil
 }
 
-// addPrinterWindows binds a queue to a port. Windows needs a named driver;
-// "Generic / Text Only" ships with the OS and passes bytes through, matching the
-// raw CUPS queues the agent uses elsewhere.
+// winRawDriver is the Windows counterpart of a raw CUPS queue: it ships with the
+// OS and passes bytes through untouched, which is what an ESC/POS or ZPL device
+// needs since the backend has already rendered what it prints.
+const winRawDriver = "Generic / Text Only"
+
+// addPrinterWindows binds a queue to a port. Windows will not create a queue for
+// a driver that is not *installed*, and shipping with the OS is not the same as
+// being installed: on a machine where nothing has ever used it, Add-Printer
+// fails with 0x80070705 ("the specified driver does not exist"). So install the
+// driver first when it is missing — Add-PrinterDriver pulls it from the driver
+// store, and naming ntprint.inf explicitly gets past a store that has not
+// indexed it yet.
 func addPrinterWindows(ctx context.Context, name, port, driver string) error {
 	if driver == "" || driver == DriverRaw || driver == DriverEverywhere {
-		driver = "Generic / Text Only"
+		driver = winRawDriver
 	}
-	return adminRun(ctx, "powershell", "-NoProfile", "-Command",
-		fmt.Sprintf("Add-Printer -Name %q -DriverName %q -PortName %q", name, driver, port))
+	script := fmt.Sprintf(`$driver = %s
+if (-not (Get-PrinterDriver -Name $driver -ErrorAction SilentlyContinue)) {
+  try { Add-PrinterDriver -Name $driver -ErrorAction Stop }
+  catch { Add-PrinterDriver -Name $driver -InfPath (Join-Path $env:SystemRoot 'inf\ntprint.inf') -ErrorAction Stop }
+}
+Add-Printer -Name %s -DriverName $driver -PortName %s -ErrorAction Stop`,
+		oscmd.Quote(driver), oscmd.Quote(name), oscmd.Quote(port))
+	return psRun(ctx, script)
+}
+
+// psRun executes a printer-administration script. Creating a queue or installing
+// a driver is an administrative act, and since the point-and-print hardening
+// updates a standard user cannot do either; when the spooler says so we re-run
+// the same script elevated, which raises Windows' own UAC prompt — the
+// counterpart of the pkexec retry adminRun does on Linux.
+func psRun(ctx context.Context, script string) error {
+	out, err := oscmd.PowerShell(ctx, script).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	msg := tidyPSError(string(out), err)
+	if needsElevation(msg) {
+		eout, eerr := runElevated(ctx, script)
+		if eerr == nil {
+			return nil
+		}
+		msg = tidyPSError(string(eout), eerr)
+	}
+	return fmt.Errorf("%s", windowsPrinterError(msg))
+}
+
+// runElevated re-runs script through a UAC-elevated PowerShell. The elevated
+// process is a separate one launched by the shell, so its output cannot be piped
+// back: the script writes any failure to a file we read afterwards, and the
+// launcher forwards the child's exit code.
+func runElevated(ctx context.Context, script string) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "klutch-printer")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+
+	ps1 := filepath.Join(dir, "task.ps1")
+	logf := filepath.Join(dir, "task.log")
+	body := "$ErrorActionPreference = 'Stop'\ntry {\n" + script +
+		"\n} catch {\n  $_ | Out-String | Set-Content -LiteralPath " + oscmd.Quote(logf) + "\n  exit 1\n}\nexit 0\n"
+	if err := os.WriteFile(ps1, []byte(body), 0o600); err != nil {
+		return nil, err
+	}
+
+	launch := fmt.Sprintf(
+		`$p = Start-Process -FilePath 'powershell.exe' `+
+			`-ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',%s `+
+			`-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode`, oscmd.Quote(ps1))
+	out, err := oscmd.PowerShell(ctx, launch).CombinedOutput()
+	if err == nil {
+		return nil, nil
+	}
+	// The elevated script's own error is the useful one; the launcher only ever
+	// reports the non-zero exit code.
+	if b, rerr := os.ReadFile(logf); rerr == nil && strings.TrimSpace(string(b)) != "" {
+		return b, err
+	}
+	return out, err
+}
+
+// windowsPrinterError turns a spooler complaint into something an operator can
+// act on. The raw text is a PowerShell exception dump — HRESULTs, a CimException
+// class path, the offending source line — which is what the Add-printer dialog
+// was pasting on screen verbatim.
+func windowsPrinterError(msg string) string {
+	l := strings.ToLower(msg)
+	switch {
+	case strings.Contains(l, "0x80070705"), strings.Contains(l, "specified driver does not exist"):
+		return "Windows does not have the \"" + winRawDriver + "\" printer driver installed and it could not be added automatically. " +
+			"Add it once from Settings > Bluetooth & devices > Printers & scanners > Add manually > \"Add a local printer\", then try again."
+	case needsElevation(l):
+		return "Adding a printer needs administrator rights. Approve the Windows prompt, or right-click Klutch Agent and choose \"Run as administrator\", then try again."
+	case strings.Contains(l, "already exists"):
+		return "A printer with that name already exists on this computer."
+	case strings.Contains(l, "0x80070002"), strings.Contains(l, "cannot find"):
+		return "Windows can no longer see that port. Click Rescan and pick the device again."
+	case msg == "":
+		return "the printer could not be added"
+	}
+	return msg
+}
+
+// needsElevation spots the several ways Windows says "you are not an admin".
+func needsElevation(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, s := range []string{
+		"access is denied", "access denied", "0x80070005",
+		"requires elevation", "unauthorizedaccess", "administrator",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// tidyPSError collapses a PowerShell error dump to its first sentence, dropping
+// the "At line:1 char:1 + …" source echo and the CategoryInfo/FullyQualifiedErrorId
+// block that follow it — except for the HRESULT, which is the one token in there
+// worth keeping because windowsPrinterError matches on it.
+func tidyPSError(out string, err error) string {
+	msg := strings.TrimSpace(out)
+	if msg == "" {
+		if err == nil {
+			return ""
+		}
+		return err.Error()
+	}
+	head := msg
+	if i := strings.Index(head, "At line:"); i >= 0 {
+		head = head[:i]
+	}
+	if hr := strings.Index(msg, "HRESULT "); hr >= 0 {
+		code := strings.Fields(strings.ReplaceAll(msg[hr+len("HRESULT "):], ",", " "))
+		if len(code) > 0 {
+			head += " (" + code[0] + ")"
+		}
+	}
+	return strings.Join(strings.Fields(head), " ")
 }

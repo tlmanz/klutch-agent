@@ -3,10 +3,12 @@
 package desktop
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+
+	"github.com/tlmanz/klutch-agent/internal/oscmd"
 )
 
 // Windows desktop integration installs into the per-user profile (no admin
@@ -74,16 +76,18 @@ func install() (string, error) {
 // createShortcut writes a .lnk via the WScript.Shell COM object (present on all
 // supported Windows), pointing at exe and taking its icon from the exe.
 func createShortcut(lnk, exe string) error {
+	// Single-quoted PowerShell literals, not %q: every argument here is a Windows
+	// path, and %q would escape the backslashes into a different path.
 	ps := fmt.Sprintf(
 		`$w = New-Object -ComObject WScript.Shell; `+
-			`$s = $w.CreateShortcut(%q); `+
-			`$s.TargetPath = %q; `+
-			`$s.WorkingDirectory = %q; `+
-			`$s.IconLocation = %q; `+
+			`$s = $w.CreateShortcut(%s); `+
+			`$s.TargetPath = %s; `+
+			`$s.WorkingDirectory = %s; `+
+			`$s.IconLocation = %s; `+
 			`$s.Description = 'Klutch print agent'; `+
 			`$s.Save()`,
-		lnk, exe, filepath.Dir(exe), exe+",0")
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
+		oscmd.Quote(lnk), oscmd.Quote(exe), oscmd.Quote(filepath.Dir(exe)), oscmd.Quote(exe+",0"))
+	cmd := oscmd.PowerShell(context.Background(), ps)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%v: %s", err, out)
 	}

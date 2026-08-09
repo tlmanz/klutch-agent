@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tlmanz/klutch-agent/internal/oscmd"
 	"github.com/tlmanz/klutch-agent/wire"
 )
 
@@ -290,7 +291,7 @@ func connKind(uri string) string {
 func enumerateWindows(ctx context.Context) []PrinterInfo {
 	// Pipe-joined columns: Name|Driver|Status|Location|Port
 	script := `Get-Printer | ForEach-Object { "$($_.Name)|$($_.DriverName)|$($_.PrinterStatus)|$($_.Location)|$($_.PortName)" }`
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", script).Output()
+	out, err := oscmd.PowerShell(ctx, script).Output()
 	if err != nil {
 		return nil
 	}
@@ -349,7 +350,7 @@ func windowsConn(port string) string {
 }
 
 func windowsDefault(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command",
+	out, err := oscmd.PowerShell(ctx,
 		`(Get-CimInstance -Class Win32_Printer -Filter "Default=True").Name`).Output()
 	if err != nil {
 		return ""

@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/tlmanz/klutch-agent/internal/oscmd"
 )
 
 // dispatch hands a spooled file to the OS print system, targeting the named
@@ -57,10 +59,13 @@ func parseRequestID(out string) string {
 
 // dispatchWindows submits the file to a named Windows printer via PowerShell.
 // PrintTo hands the file to the spooler for the named queue; -Wait blocks until
-// it is submitted so an exec failure surfaces as a real dispatch error.
+// it is submitted so an exec failure surfaces as a real dispatch error. Both
+// arguments are single-quoted for PowerShell rather than %q-escaped: the spool
+// path is a Windows path, and %q would double every backslash in it.
 func dispatchWindows(ctx context.Context, printer, path string) error {
-	ps := fmt.Sprintf("Start-Process -FilePath %q -Verb PrintTo -ArgumentList %q -Wait", path, printer)
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", ps).CombinedOutput()
+	ps := fmt.Sprintf("Start-Process -FilePath %s -Verb PrintTo -ArgumentList %s -Wait",
+		oscmd.Quote(path), oscmd.Quote(printer))
+	out, err := oscmd.PowerShell(ctx, ps).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("powershell print: %v: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -97,8 +102,12 @@ func cupsCancel(ctx context.Context, reqID string) error {
 func setDefaultPrinter(ctx context.Context, name string) error {
 	switch runtime.GOOS {
 	case "windows":
-		return run(ctx, "powershell", "-NoProfile", "-Command",
-			fmt.Sprintf("(New-Object -ComObject WScript.Network).SetDefaultPrinter(%q)", name))
+		out, err := oscmd.PowerShell(ctx,
+			fmt.Sprintf("(New-Object -ComObject WScript.Network).SetDefaultPrinter(%s)", oscmd.Quote(name))).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("set default printer: %s", tidyPSError(string(out), err))
+		}
+		return nil
 	default:
 		return run(ctx, "lpoptions", "-d", name)
 	}
@@ -106,7 +115,7 @@ func setDefaultPrinter(ctx context.Context, name string) error {
 
 // run executes a command, folding stderr into the error for diagnostics.
 func run(ctx context.Context, name string, args ...string) error {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := oscmd.Command(ctx, name, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %v: %s", name, err, strings.TrimSpace(string(out)))
 	}
